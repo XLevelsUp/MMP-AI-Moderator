@@ -27,11 +27,26 @@ def test_clean_pet_photo_is_approved():
 
 
 def test_composite_uses_the_spec_weights():
-    # D1 70 (distress -30): 0.25*70 + 25 + 20 + 10 + 10 + 10
+    # D1 75 (malnourished -25): 0.25*75 + 25 + 20 + 10 + 10 + 10
+    _, verdict = judge(frame("welfare_malnourished"))
+    assert verdict.composite_score == 93.8   # rounded to one decimal
+    assert verdict.decision == "APPROVED"
+    assert verdict.flags == ["welfare_malnourished"]
+
+
+def test_distress_always_reaches_a_human():
+    # gate2-0.17: -30 alone leaves the composite at 92.5, but visible fear or panic is reviewed.
     _, verdict = judge(frame("welfare_distress"))
     assert verdict.composite_score == 92.5
-    assert verdict.decision == "APPROVED"
-    assert verdict.flags == ["welfare_distress"]
+    assert verdict.decision == "HUMAN_REVIEW"
+
+
+def test_aggression_is_reviewed_never_rejected():
+    # A dog biting its groomer, or a fight that may be play: a human decides.
+    result, verdict = judge(frame("violence_animal_aggression"))
+    assert result.dimensions["D3_violence"] == 70
+    assert verdict.decision == "HUMAN_REVIEW"
+    assert verdict.hard_reject is False
 
 
 def test_dimension_never_goes_below_zero():

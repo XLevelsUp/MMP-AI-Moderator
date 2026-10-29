@@ -99,6 +99,22 @@ def fuse(siglip_score: float, det_max: float) -> float:
     return f.detector_weight * detector_score(det_max) + f.siglip_weight * siglip_score
 
 
+def is_wild(category: str, wild_scene: bool, det: FrameDetections | None) -> bool:
+    """Spec 2.1: wild animals and marine mammals are never pets -> HUMAN_REVIEW. A sure BioCLIP
+    name decides alone unless a pet species is also in the picture; SigLIP's idea or an unsure
+    name also needs a wild scene (a blurred dog in a field must not become a "badger")."""
+    g = settings.gate1
+    review = g.always_review_categories
+    if (
+        category in review and det is not None and det.species
+        and det.species_confidence >= g.wild_species_min_confidence
+        and g.species.get(det.species[0]) == category
+    ):
+        pet_check = review + g.wild_check_categories
+        return not any(g.species.get(s) not in pet_check for s in det.species[1:])
+    return wild_scene and category in g.wild_check_categories + review
+
+
 def score_frames(
     sims: np.ndarray,
     labels: list[str],
@@ -143,8 +159,7 @@ def score_frames(
             threshold=threshold,
             illustrated=bool(illustrated[i]),
             insect=insect,
-            wild=(bool(wild[i]) and category in g.wild_check_categories)
-            or category in g.always_review_categories,
+            wild=is_wild(category, bool(wild[i]), det),
             best_animal=name,
             best_no_pet=no_pet_names[best_no_pet[i]],
             animal_similarity=float(animal[i].max()),

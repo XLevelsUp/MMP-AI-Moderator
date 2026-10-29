@@ -170,7 +170,7 @@ gate1:
   # Bump when the Gate 1 logic changes. model_version = this + model + revision + a
   # fingerprint of every decision-relevant setting, so editing a sentence or a threshold
   # automatically gives a new model_version (and a new cache key).
-  version: gate1-fused-0.5   # 0.5: wild-animal list -> always review; 0.4: look-alike queries, confident-species bar, marine always review
+  version: gate1-fused-0.6   # 0.6: wild only when BioCLIP is sure and no pet is seen, else wild scene; sea animals out; 0.5: wild-animal list -> always review; 0.4: look-alike queries, confident-species bar, marine always review
   # true = act on Gate 1 (MOD_001 rejections). false = shadow mode: compute and flag only,
   # decision stays HUMAN_REVIEW. The POC runs live; production can start in shadow mode.
   enforce: true
@@ -203,11 +203,14 @@ gate1:
     # Animals that are not pets (spec 2.1) but must be recognised, so they go to a person
     # instead of being mistaken for the nearest pet (a fruit bat was approved as "tarantula /
     # monkey", 2026-10-28). Same names in gate1.species for the detector and BioCLIP.
+    # "a wild animal" and "a shark" left out (0.6): they matched blurred dogs and aquariums.
     wild_animals: ["a bat", "a tiger", "a lion", "a leopard", "a bear", "a wolf", "a fox",
-                   "an elephant", "a crocodile", "an eagle", "an owl", "a shark", "a wild animal"]
+                   "an elephant", "a crocodile", "an eagle", "an owl"]
   insect_categories: [insects]                        # use pass_insect
   wild_check_categories: [exotic, marine_mammals]     # decided: no owner context -> HUMAN_REVIEW
-  always_review_categories: [marine_mammals, wild_animals]   # decided: never pets (spec 2.1) -> always HUMAN_REVIEW
+  # Decided: never pets (spec 2.1) -> HUMAN_REVIEW when BioCLIP names one with at least
+  # wild_species_min_confidence and no pet species is in the picture; otherwise only with a wild scene.
+  always_review_categories: [marine_mammals, wild_animals]
   # Plain non-pet scenes only. Pet accessories (cage, tank, bowl, collar, bed, leash) are left
   # out on purpose: they appear IN most pet photos, and SigLIP cannot tell "an empty cage" from
   # "a cage with birds", which rejected real pets (budgies, goldfish, puppy + kitten).
@@ -256,6 +259,9 @@ gate1:
   # BioCLIP must be at least this sure before its species changes the bar (insects 60) or the
   # wild / marine rules; below it SigLIP's view of the picture decides the category.
   species_category_min_confidence: 0.5
+  # A wild / marine species name alone sends a photo to review only from this confidence
+  # (0.6: BioCLIP named a hamster in hands "otter" and aquarium fish "stingray").
+  wild_species_min_confidence: 0.7
   # Names the detector looks for and BioCLIP chooses from -> the spec 2.1 category of each.
   # These names are what the API returns in species_detected.
   species:
@@ -312,7 +318,8 @@ gate1:
     dolphin: marine_mammals
     whale: marine_mammals
     # Wild animals -> HUMAN_REVIEW (added 2026-10-28). Left out on purpose because they look
-    # like pets and would send pets to review: dingo, wildcat, hedgehog, python, camel, wild boar.
+    # like pets and would send pets to review: dingo, wildcat, hedgehog, python, camel, wild boar,
+    # and (0.6) sea animals that aquarium photos turned into: shark, stingray, octopus, jellyfish.
     fruit bat: wild_animals
     bat: wild_animals
     tiger: wild_animals
@@ -375,13 +382,9 @@ gate1:
     penguin: wild_animals
     pelican: wild_animals
     hornbill: wild_animals
-    shark: wild_animals
-    octopus: wild_animals
-    jellyfish: wild_animals
     seal: wild_animals
     sea lion: wild_animals
     walrus: wild_animals
-    stingray: wild_animals
 
 ai_label:
   # Not in the spec: our own label (ai_generated / ai_score in the response). It never
@@ -400,7 +403,7 @@ targets:   # spec MMP-MOD-2026-001, non-functional requirements
 
 gate2:
   # Bump when the Gate 2 logic changes. Part of model_version, like gate1.version.
-  version: gate2-0.16  # 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
+  version: gate2-0.17  # 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
   # true = act on Gate 2 (rejections, reviews, approvals). false = shadow mode: scores are
   # computed, reported and logged, nothing is approved, and a Gate 2 rejection only adds
   # the flag gate2_would_reject.
@@ -434,7 +437,9 @@ gate2:
   # hard: rejected whatever the composite. review: always at least HUMAN_REVIEW.
   signals:
     # D1 animal welfare (4.1)
-    welfare_distress:            {dimension: D1_welfare, deduction: 30, code: MOD_002}
+    # Decided 2026-10-29: visible fear, panic or stress always reaches a human (spec -30 alone
+    # would only move the composite to ~92 = APPROVED).
+    welfare_distress:            {dimension: D1_welfare, deduction: 30, code: MOD_002, review: true}
     welfare_painful_restraint:   {dimension: D1_welfare, deduction: 40, code: MOD_002}
     welfare_wounds:              {dimension: D1_welfare, deduction: 50, code: MOD_002}
     welfare_malnourished:        {dimension: D1_welfare, deduction: 25, code: MOD_002}
@@ -457,6 +462,10 @@ gate2:
     violence_human_gore:         {dimension: D3_violence, deduction: 50, code: MOD_005}
     violence_weapon_pointed:     {dimension: D3_violence, deduction: 70, code: MOD_005}
     violence_animal_fighting:    {dimension: D3_violence, deduction: 100, code: MOD_003, hard: true}
+    # Not in the spec (decided 2026-10-29): an animal biting, snapping at or attacking a person or
+    # another animal with clear aggression, and fights that may be play. A human decides; a visible
+    # bite injury adds violence_human_gore / welfare_wounds as usual.
+    violence_animal_aggression:  {dimension: D3_violence, deduction: 30, code: MOD_005, review: true}
     violence_human_on_animal:    {dimension: D3_violence, deduction: 100, code: MOD_002, hard: true}
     violence_slaughter:          {dimension: D3_violence, deduction: 80, code: MOD_005, hard: true}
     # D4 prohibited items (4.4)
@@ -630,7 +639,8 @@ gate2:
     harm:
       distress:
         signals: [welfare_distress]
-        sentences: [a frightened animal cowering in fear, an animal in distress]
+        sentences: [a frightened animal cowering in fear, an animal in distress,
+                    a panicking animal struggling to escape from a person]
       restraint:   # spiked muzzle: 0.37 on a missed fetish-style upload (2026-10-27), 0.000 on safe
         signals: [welfare_painful_restraint]
         sentences: [an animal tied up tightly with rope, a dog with its mouth taped shut,
@@ -648,13 +658,18 @@ gate2:
       malnourished:
         signals: [welfare_malnourished]
         sentences: [a starving emaciated dog with visible ribs, a very thin malnourished animal]
-      fighting:
+      fighting:   # spec "dogfight, cockfight": organised fighting only -> hard reject
         signals: [welfare_fighting, violence_animal_fighting]
-        # a real fight outside a pit was missed (2026-10-27): the pit sentence lost to the
-        # safe "puppies play fighting"; these two gave 0.88 / 0.82 on it, safe pictures <= 0.002
         sentences: [two dogs fighting viciously in a fighting pit, a cockfight,
-                    organised animal fighting with people betting, a vicious dog fight,
-                    dogs snarling and attacking each other]
+                    organised animal fighting with people betting]
+      # 0.17: "a vicious dog fight" / "dogs snarling and attacking each other" moved here from
+      # fighting (hard): they hard-rejected 10 of 22 play-fighting photos. A fight that may be
+      # play, or an animal attacking a person, now goes to a human instead.
+      aggression:
+        signals: [violence_animal_aggression]
+        sentences: [a vicious dog fight, dogs snarling and attacking each other,
+                    a dog aggressively biting a person, an aggressive dog lunging at a person,
+                    an animal attacking a person]
       abuse:   # "someone hurting a cat" was too vague: 0.30 on a kitten held in a hand
         signals: [welfare_abuse, violence_human_on_animal]
         # stick abuse missed 2026-10-28 (stock photo, raised stick over a held-down dog):

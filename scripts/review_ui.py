@@ -35,13 +35,13 @@ def guess_type(name: str) -> str:
     return "video" if Path(name).suffix.lower() in VIDEO_EXT else "image"
 
 
-def moderate(api_url, name, data, content_type, user_id, context):
+def moderate(api_url, name, data, content_type, user_id, context, timeout):
     start = time.perf_counter()
     response = httpx.post(
         api_url,
         files={"file": (name, data)},
         data={"content_type": content_type, "user_id": user_id, "context": context},
-        timeout=180,
+        timeout=timeout,
     )
     round_trip_ms = round((time.perf_counter() - start) * 1000)
     try:
@@ -109,6 +109,8 @@ st.title("MeetMyPets moderation tester")
 
 with st.sidebar:
     api_url = st.text_input("API URL", "http://localhost:8000/api/v1/moderate")
+    # A 60 s video on the laptop CPU takes several minutes; on a GPU it is seconds.
+    request_timeout = st.number_input("Request timeout (s)", min_value=10, max_value=3600, value=900, step=60)
     user_id = st.text_input("user_id", "3f2b8c1e-0000-4000-8000-000000000001")
     context = st.selectbox("context", ["post", "profile", "breeding", "story"])
     type_mode = st.radio("content_type", ["auto (from file extension)", "image", "video"])
@@ -134,7 +136,7 @@ with upload_tab:
         for f in files:
             data = f.getvalue()
             content_type = content_type_for(f.name)
-            status, body, ms = moderate(api_url, f.name, data, content_type, user_id, context)
+            status, body, ms = moderate(api_url, f.name, data, content_type, user_id, context, request_timeout)
             rows.append(to_row(f.name, content_type, status, body, ms))
 
             with st.container(border=True):
@@ -185,7 +187,7 @@ with folder_tab:
             content_type = content_type_for(path.name)
             for run in range(runs):
                 uid = str(uuid.uuid4()) if bypass_cache else user_id
-                status, body, ms = moderate(api_url, path.name, data, content_type, uid, context)
+                status, body, ms = moderate(api_url, path.name, data, content_type, uid, context, request_timeout)
                 rows.append(to_row(path.name, content_type, status, body, ms) | {"run": run + 1})
                 progress.progress((i * runs + run + 1) / max(total, 1))
 

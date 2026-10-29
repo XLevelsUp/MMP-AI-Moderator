@@ -19,8 +19,6 @@ from app.gates.audio import AudioResult
 from app.gates.scene import SceneResult
 from app.decision.engine import Verdict
 
-
-
 @dataclass
 class ModerationContext:
     """One object per upload. Each pipeline step reads what it needs and adds its results."""

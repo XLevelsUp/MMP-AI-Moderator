@@ -258,6 +258,28 @@ def test_marine_mammal_always_goes_to_review():
     assert result.wild is True
 
 
+def test_sure_wild_species_goes_to_review():
+    # Fruit bat photo (2026-10-28): approved as "tarantula / monkey" before the wild list.
+    result = gate1(SIGLIP_SURE, det_max=0.9, species=["fruit bat"], confidence=0.9)
+
+    assert result.wild is True
+
+
+def test_unsure_wild_species_needs_a_wild_scene():
+    # gate1-fused-0.6: a hamster cupped in hands was named "otter" at low confidence.
+    result = gate1(SIGLIP_SURE, det_max=0.9, species=["otter"], confidence=0.6)
+
+    assert result.wild is False
+    assert gate1({**SIGLIP_SURE, "wild__": 0.4}, det_max=0.9, species=["otter"], confidence=0.6).wild is True
+
+
+def test_wild_name_next_to_a_pet_is_not_wild():
+    # Aquarium photo named "shark, dog": a pet in the picture wins.
+    result = gate1(SIGLIP_SURE, det_max=0.9, species=["bat", "dog"], confidence=0.9)
+
+    assert result.wild is False
+
+
 def test_lookalike_boxes_never_count_as_animals():
     figurine = Box(0.9, "ceramic figurine", (10.0, 10.0, 50.0, 50.0), animal=False)
 
