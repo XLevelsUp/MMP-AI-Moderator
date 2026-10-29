@@ -89,21 +89,35 @@ class GuardModel:
 
     @torch.inference_mode()
     def ask(self, image: Image.Image, questions: list[str], instruct: str) -> list[float]:
-        """Several questions about one picture in GPU batches of gate2.guard.batch_size. The tokenizer
-        pads on the left, so the last position of every row is that question's answer slot. (One
-        picture per batch: the tokenizer cannot batch pictures of different sizes.)"""
+        """Several questions about one picture in GPU batches of gate2.guard.batch_size.
+
+        The vision encoder reads the picture once and every question in the batch reuses it:
+        giving the model the picture once per row ran a T4 out of memory (the encoder joins all
+        pictures of a batch into one sequence, so 11 copies cost 121x the attention memory).
+        The tokenizer pads on the left, so the last position of every row is its answer slot;
+        only that position's logits are computed."""
         uri = self.data_uri(image)
         size = settings.gate2.guard.batch_size
+        picture = None   # the vision encoder's output for this picture
         out = []
         for start in range(0, len(questions), size):
             chunk = [self.conversation(uri, q, instruct) for q in questions[start:start + size]]
             encoded = self.tokenizer.apply_chat_template(chunk, return_tensors="pt", return_dict=True, padding=True)
-            inputs = {
-                key: (value.to(self.device, self.dtype) if key == "pixel_values" else value.to(self.device))
-                if torch.is_tensor(value) else value
-                for key, value in encoded.items()
-            }
-            last = self.model(**inputs).logits[:, -1]
+            if picture is None:
+                picture = self.model.model.get_image_features(
+                    pixel_values=encoded["pixel_values"][:1].to(self.device, self.dtype),
+                    image_sizes=encoded["image_sizes"][:1].to(self.device),
+                    vision_feature_layer=self.model.config.vision_feature_layer,
+                    return_dict=True,
+                )
+                features = picture.pooler_output[0]
+            picture.pooler_output = (features,) * len(chunk)
+            last = self.model(
+                input_ids=encoded["input_ids"].to(self.device),
+                attention_mask=encoded["attention_mask"].to(self.device),
+                mm_encoder_outputs={"image": picture},
+                logits_to_keep=1,
+            ).logits[:, -1]
             out += [self.yes_probability(row) for row in last]
         return out
 
