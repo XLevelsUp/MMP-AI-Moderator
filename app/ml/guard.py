@@ -54,7 +54,8 @@ class GuardModel:
         logger.info("%s loaded (%s @ %s, %s)", self.name, self.spec.repo, self.spec.revision[:7], self.dtype)
 
     def warmup(self) -> None:
-        self.score(Image.new("RGB", (64, 64), "gray"), "Is there an animal?", settings.gate2.guard.instruct)
+        self.scores([Image.new("RGB", (64, 64), "gray")], {"warmup": "Is there an animal?"},
+                    settings.gate2.guard.instruct)
 
     @staticmethod
     def data_uri(image: Image.Image) -> str:
@@ -62,24 +63,20 @@ class GuardModel:
         image.convert("RGB").save(buf, format="JPEG", quality=95)
         return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
-    @torch.inference_mode()
-    def score(self, image: Image.Image, question: str, instruct: str) -> float:
-        """Probability that the answer to `question` about `image` is "yes"."""
-        messages = [
+    @staticmethod
+    def conversation(uri: str, question: str, instruct: str) -> list[dict]:
+        return [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": [
                 {"type": "text", "text": f"<Instruct>: {instruct}\n\n<Query>: {question}\n\n<Document>: "},
-                {"type": "image_url", "image_url": {"url": self.data_uri(image)}},
+                {"type": "image_url", "image_url": {"url": uri}},
                 {"type": "text", "text": "\n\n"},
             ]},
         ]
-        encoded = self.tokenizer.apply_chat_template(messages, return_tensors="pt", return_dict=True)
-        inputs = {
-            key: (value.to(self.device, self.dtype) if key == "pixel_values" else value.to(self.device))
-            if torch.is_tensor(value) else value
-            for key, value in encoded.items()
-        }
-        logprobs = torch.log_softmax(self.model(**inputs).logits[0, -1].float(), dim=-1)
+
+    def yes_probability(self, logits: torch.Tensor) -> float:
+        """"yes" vs "no" at the answer position (model card scoring)."""
+        logprobs = torch.log_softmax(logits.float(), dim=-1)
         z_yes = z_no = -1e9
         values, ids = logprobs.topk(20)
         for logp, token_id in zip(values.tolist(), ids.tolist()):
@@ -90,6 +87,27 @@ class GuardModel:
                 z_no = max(z_no, logp)
         return math.exp(z_yes) / (math.exp(z_yes) + math.exp(z_no))
 
+    @torch.inference_mode()
+    def ask(self, image: Image.Image, questions: list[str], instruct: str) -> list[float]:
+        """Several questions about one picture in GPU batches of gate2.guard.batch_size. The tokenizer
+        pads on the left, so the last position of every row is that question's answer slot. (One
+        picture per batch: the tokenizer cannot batch pictures of different sizes.)"""
+        uri = self.data_uri(image)
+        size = settings.gate2.guard.batch_size
+        out = []
+        for start in range(0, len(questions), size):
+            chunk = [self.conversation(uri, q, instruct) for q in questions[start:start + size]]
+            encoded = self.tokenizer.apply_chat_template(chunk, return_tensors="pt", return_dict=True, padding=True)
+            inputs = {
+                key: (value.to(self.device, self.dtype) if key == "pixel_values" else value.to(self.device))
+                if torch.is_tensor(value) else value
+                for key, value in encoded.items()
+            }
+            last = self.model(**inputs).logits[:, -1]
+            out += [self.yes_probability(row) for row in last]
+        return out
+
     def scores(self, images: list[Image.Image], questions: dict[str, str], instruct: str) -> list[dict[str, float]]:
         """Every question for every picture: one {question name: probability} per picture."""
-        return [{name: self.score(image, text, instruct) for name, text in questions.items()} for image in images]
+        names = list(questions)
+        return [dict(zip(names, self.ask(image, [questions[n] for n in names], instruct))) for image in images]

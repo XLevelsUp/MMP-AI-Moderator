@@ -55,7 +55,7 @@ def moderate(path: Path, content_type: str):
         response = orchestrator.run_pipeline(ctx)
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return response, ctx.timings
+    return response, ctx
 
 
 def pct(values, q) -> float:
@@ -88,7 +88,8 @@ def main() -> None:
             content_type = "video" if ext in VIDEO_EXT else "image"
             for _ in range(args.runs):
                 begin = perf_counter()
-                response, timings = moderate(path, content_type)
+                response, ctx = moderate(path, content_type)
+                timings = ctx.timings
                 totals[content_type].append(perf_counter() - begin)
                 for stage, ms in timings.items():
                     stages.setdefault(f"{content_type}:{stage}", []).append(ms)
@@ -103,6 +104,10 @@ def main() -> None:
             stage_text = " ".join(f"{s}:{ms}" for s, ms in timings.items())
             print(f"{mark} {folder.name:<7} {response.decision:<12} {response.pet_score!s:>5} "
                   f"{species:<20} {path.name[:36]:<36} | {stage_text}")
+            if mark == "XX":   # why: flags, the Gate 2 signals that fired, the top guard scores
+                fired = ",".join(ctx.gate2.fired) if ctx.gate2 else "-"
+                print(f"     why: flags={','.join(response.flags)} signals={fired} "
+                      f"guard={orchestrator.guard_summary(ctx)}")
 
     print("\n--- decisions ---")
     if judged:

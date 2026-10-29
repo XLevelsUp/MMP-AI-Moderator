@@ -382,6 +382,7 @@ class Gate2GuardSettings(StrictModel):
     instruct: str                                # context sent with every question
     image_size: int = Field(ge=64)               # long side of each picture sent to the model
     video_frames: int = Field(ge=1)              # frames of a video, spread from start to end
+    batch_size: int = Field(ge=1)                # questions per GPU pass
     crop_margin: float = Field(ge=0)             # pet box grown by this share of its size per side
     crop_max_area: float = Field(gt=0, le=1)     # no crop when the grown box covers more than this
     questions: dict[str, GuardQuestion] = Field(min_length=1)
