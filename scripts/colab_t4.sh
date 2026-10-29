@@ -17,8 +17,12 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 uv export --no-hashes --no-dev --format requirements-txt | grep -v -E "^(torch|torchvision|torchaudio)" > /tmp/req.txt
 uv pip install --system -q -r /tmp/req.txt
+# Colab sometimes ships torchvision / torchaudio built for another torch; we use neither, so a
+# mismatched one is removed instead of breaking every transformers import.
+python -c "import torchvision" 2>/dev/null || uv pip uninstall --system torchvision
+python -c "import torchaudio" 2>/dev/null || uv pip uninstall --system torchaudio
 
-python -m scripts.download_models --models siglip2_base owlv2 bioclip2 nsfw_vit ai_smaug ast_audioset whisper_base
+python -m scripts.download_models --models siglip2_base owlv2 bioclip2 nsfw_vit ai_smaug ast_audioset whisper_base shieldstral
 python -m scripts.download_models --ocr
 
-ML_DEVICE=cuda ML_DTYPE=float16 FFMPEG_HWACCEL=cuda python -m scripts.bench_pipeline ../bench --runs 2
+ML_DEVICE=cuda ML_DTYPE=float16 FFMPEG_HWACCEL=cuda GUARD_MODEL=shieldstral python -m scripts.bench_pipeline ../bench --runs 2
