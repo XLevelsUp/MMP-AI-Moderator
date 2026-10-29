@@ -96,6 +96,10 @@ def load_models() -> None:
             registry.register(AudioEvents(settings.ml.audio_model))
         if settings.ml.speech_model:
             registry.register(SpeechToText(settings.ml.speech_model))
+    if settings.ml.guard_model:
+        from app.ml.guard import GuardModel
+
+        registry.register(GuardModel(settings.ml.guard_model))
     registry.load_all()
 
 
@@ -143,3 +147,8 @@ def get_audio_model():
 def get_speech_model():
     """The loaded speech-to-text model (Whisper), or None."""
     return _ready(settings.ml.speech_model)
+
+
+def get_guard_model():
+    """The loaded policy-question model (Shieldstral), or None."""
+    return _ready(settings.ml.guard_model)

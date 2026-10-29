@@ -16,6 +16,7 @@ from app.gates.gate2 import Gate2Result
 from app.gates.quality import QualityResult
 from app.gates.relevance import RelevanceResult
 from app.gates.audio import AudioResult
+from app.gates.guard import GuardResult
 from app.gates.scene import SceneResult
 from app.decision.engine import Verdict
 
@@ -58,6 +59,7 @@ class ModerationContext:
     # scores and the engine's verdict
     scene: list[SceneResult] = field(default_factory=list)
     nsfw: dict[int, float] = field(default_factory=dict)  # frame index -> nsfw probability
+    guard: dict[int, GuardResult] = field(default_factory=dict)  # frame index -> policy-question scores
     ocr_text: dict[int, str] = field(default_factory=dict)  # frame index -> text read on it
     audio: AudioResult | None = None                        # video soundtrack (spec 6.2)
     quality: list[QualityResult] = field(default_factory=list)

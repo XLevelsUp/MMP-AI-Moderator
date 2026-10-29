@@ -28,6 +28,7 @@ def decision_settings() -> dict:
             "ocr": ml.ocr,
             "audio_model": ml.models[ml.audio_model].model_dump() if ml.audio_model else None,
             "speech_model": ml.models[ml.speech_model].model_dump() if ml.speech_model else None,
+            "guard_model": ml.models[ml.guard_model].model_dump() if ml.guard_model else None,
             "prompts": ml.prompts,
         },
         "gate1": settings.gate1.model_dump(),

@@ -115,6 +115,8 @@ ml:
   ocr: true                # read text on images / video frames (gate2.text.ocr); false = off
   audio_model: ast_audioset   # video sound events (spec 6.2); null = off
   speech_model: whisper_base  # video speech to text (spec 6.2); whisper_small = better Hindi, slower; null = off
+  # D1-D4 policy questions (gate2.guard). ~8 GB, so off on this laptop; GPU runs: GUARD_MODEL=shieldstral
+  guard_model: null
   batch_size: 16           # video frames per SigLIP pass
   models:
     siglip2_base:
@@ -152,6 +154,10 @@ ml:
     ai_smaug:   # AI-generated label candidate: EmbeddingGemma-2 vision + classifier (repo code)
       repo: abacusai/Smaug-AI-Image-Detector
       revision: c7c95951e04a87b884a4ad479401b1128c3903bd
+      licence: Apache-2.0
+    shieldstral:   # yes / no safety questions on images (gate2.guard); chosen 2026-10-29 over ShieldGemma 2
+      repo: mistralai/Shieldstral-1.0-3B
+      revision: 003ec7e2b0bab5f0e6307edbaf186fa5822b76f5
       licence: Apache-2.0
     ai_swin:    # AI-generated label candidate: Swin v2, labels artificial / real
       repo: haywoodsloan/ai-image-detector-deploy
@@ -406,7 +412,7 @@ targets:   # spec MMP-MOD-2026-001, non-functional requirements
 
 gate2:
   # Bump when the Gate 2 logic changes. Part of model_version, like gate1.version.
-  version: gate2-0.17  # 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
+  version: gate2-0.18  # 0.18: Shieldstral policy questions (gate2.guard) + detector crops; 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
   # true = act on Gate 2 (rejections, reviews, approvals). false = shadow mode: scores are
   # computed, reported and logged, nothing is approved, and a Gate 2 rejection only adds
   # the flag gate2_would_reject.
@@ -484,6 +490,12 @@ gate2:
     audio_distress:              {dimension: D1_welfare, deduction: 20, code: MOD_002}
     audio_violence:              {dimension: D1_welfare, deduction: 20, code: MOD_002}
     audio_abusive_speech:        {dimension: D1_welfare, deduction: 20, code: MOD_002}
+    # gate2.guard review band (not in the spec): a score between review_from and act_from means
+    # "a human should look"; a small deduction so it counts, review so it always reaches a person.
+    guard_concern_welfare:       {dimension: D1_welfare, deduction: 10, code: MOD_002, review: true}
+    guard_concern_nsfw:          {dimension: D2_nsfw, deduction: 10, code: MOD_004, review: true}
+    guard_concern_violence:      {dimension: D3_violence, deduction: 10, code: MOD_005, review: true}
+    guard_concern_items:         {dimension: D4_prohibited, deduction: 10, code: MOD_006, review: true}
   # spec 7 (and the 4.4 hunting exception). A context changes non-hard signals only:
   # a hard reject is never softened. When two contexts set the same signal, the lower wins.
   contexts:
@@ -782,3 +794,96 @@ gate2:
     # 60-181 s on the laptop CPU and invented 900-2600 characters of text (2026-10-27).
     speech_label: Speech
     speech_min_score: 0.5
+  # D1-D4 from yes / no policy questions (ml.guard_model, Shieldstral 1.0). Each picture is asked every
+  # question: the full frame, plus a crop around the detector's pet box grown to include whoever is
+  # handling the animal (the crop lifted a bite moment from 0.10 to 0.42). Score >= act_from fires
+  # the question's signal; review_from..act_from fires its review_signal (a human looks).
+  # Thresholds set 2026-10-29 from 265 safe photos (D:/samples/safety_check + Gate 1 pet sets):
+  # review_from sits above normal photos (at most ~1% to review); act_from stays at the model-card
+  # 0.5 until trust-and-safety examples set it from the spec 9.3 recall targets. The questions are
+  # one fixed list written from the policy, never tuned to a single test file.
+  # Known gaps (2026-10-29): visible blood (a 1-second bleed after a bite scored 0.09) and split-second
+  # snaps without injury; to close by fine-tuning on review-queue labels.
+  guard:
+    instruct: >-
+      You moderate photos for a pet social app. Normal pet life is NOT a violation by itself: play
+      fighting, tug-of-war, vet care (cones, bandages, injections), grooming and baths, raw pet food,
+      mothers nursing, leashes, harnesses, crates, toys and costumes. Judge the animal's behaviour and
+      condition, not only the setting.
+    image_size: 640       # long side; 1024 barely helped (aggression 0.09 -> 0.15) at 2.5x the cost
+    video_frames: 12      # spread from start to end
+    crop_margin: 0.5      # pet box grown by half its width / height on each side
+    crop_max_area: 0.6    # no crop when that covers most of the picture anyway
+    questions:
+      any_harm:
+        text: Does this image show violence, injury, cruelty or harm to any animal or person?
+        review_from: 0.30
+        act_from: 0.5
+        signal: guard_concern_violence
+        review_signal: guard_concern_violence
+      hurt:
+        text: Is an animal being hit, kicked, thrown or otherwise hurt by a person?
+        review_from: 0.30
+        act_from: 0.5
+        signal: welfare_abuse
+        review_signal: guard_concern_welfare
+      distress:
+        text: >-
+          Is an animal visibly frightened, panicking or in acute distress, for example cowering,
+          screaming or struggling to escape?
+        review_from: 0.25
+        act_from: 0.5
+        signal: welfare_distress
+        review_signal: guard_concern_welfare
+      restrained:
+        text: Is an animal chained, tied or caged in a cruel way?
+        review_from: 0.35   # crates with a mother and babies reached 0.79 / 0.60
+        act_from: 0.5
+        signal: welfare_painful_restraint
+        review_signal: guard_concern_welfare
+      neglect:
+        text: Does an animal look starved, badly injured or neglected?
+        review_from: 0.30
+        act_from: 0.5
+        signal: welfare_neglect
+        review_signal: guard_concern_welfare
+      sexual:
+        text: Does the image show nudity or sexual content?
+        review_from: 0.20
+        act_from: 0.5
+        signal: nsfw_sexual_human
+        review_signal: guard_concern_nsfw
+      fight:
+        text: >-
+          Is this organised animal fighting, such as a dogfight or cockfight, or animals being made
+          to fight?
+        review_from: 0.15
+        act_from: 0.5
+        signal: welfare_fighting
+        review_signal: guard_concern_violence
+      aggression:
+        text: >-
+          Is an animal aggressively biting, snapping at or attacking a person or another animal (not
+          playful)?
+        review_from: 0.30
+        act_from: 0.5
+        signal: violence_animal_aggression
+        review_signal: guard_concern_violence
+      gore:
+        text: Does the image show blood, gore or a dead or slaughtered animal?
+        review_from: 0.30
+        act_from: 0.5
+        signal: violence_animal_gore
+        review_signal: guard_concern_violence
+      weapon:
+        text: Is a real weapon pointed at or used on an animal?
+        review_from: 0.30
+        act_from: 0.5
+        signal: violence_weapon_pointed
+        review_signal: guard_concern_violence
+      drugs:
+        text: Does the image show illegal drugs or drug use?
+        review_from: 0.15
+        act_from: 0.5
+        signal: item_drugs
+        review_signal: guard_concern_items

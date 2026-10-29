@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_FILE = PROJECT_ROOT / "config" / "settings.yaml"
 # Files in model repos we never download or need: duplicate .bin / TensorFlow / Flax / ONNX
 # copies of the .safetensors weights, and leftover training checkpoints.
-MODEL_IGNORE_PATTERNS = ["*.bin", "*.pt", "*.h5", "*.msgpack", "*.onnx", "checkpoint-*/*"]
+MODEL_IGNORE_PATTERNS = ["*.bin", "*.pt", "*.h5", "*.msgpack", "*.onnx", "checkpoint-*/*", "consolidated.safetensors"]
 load_dotenv(PROJECT_ROOT / ".env")
 
 
@@ -120,13 +120,15 @@ class MLSettings(StrictModel):
     ocr: bool                       # read text on images / video frames (gate2.text.ocr)
     audio_model: str | None         # video sound events (gate2.audio)
     speech_model: str | None        # video speech to text (gate2.audio)
+    guard_model: str | None         # D1-D4 policy questions (gate2.guard), e.g. Shieldstral
     batch_size: int = Field(ge=1)
     models: dict[str, ModelSettings]
     prompts: dict[str, str]
 
     @model_validator(mode="after")
     def chosen_models_are_listed(self):
-        for role in ("backbone", "detector", "species_model", "nsfw_model", "ai_model", "audio_model", "speech_model"):
+        for role in ("backbone", "detector", "species_model", "nsfw_model", "ai_model", "audio_model", "speech_model",
+                     "guard_model"):
             name = getattr(self, role)
             if name is not None and name not in self.models:
                 raise ValueError(f"ml.{role} '{name}' is not listed in ml.models")
@@ -362,6 +364,29 @@ class Gate2NsfwSettings(StrictModel):
     levels: dict[str, Annotated[float, Field(gt=0, lt=1)]] = Field(min_length=1)
 
 
+class GuardQuestion(StrictModel):
+    text: str                                    # one yes / no question, written from the policy
+    review_from: float = Field(gt=0, lt=1)       # from here a human looks (review_signal)
+    act_from: float = Field(gt=0, lt=1)          # from here the question's own signal fires
+    signal: str                                  # gate2.signals id fired at act_from
+    review_signal: str                           # gate2.signals id fired in the review band
+
+    @model_validator(mode="after")
+    def review_below_act(self):
+        if self.review_from >= self.act_from:
+            raise ValueError("gate2.guard question: review_from must be below act_from")
+        return self
+
+
+class Gate2GuardSettings(StrictModel):
+    instruct: str                                # context sent with every question
+    image_size: int = Field(ge=64)               # long side of each picture sent to the model
+    video_frames: int = Field(ge=1)              # frames of a video, spread from start to end
+    crop_margin: float = Field(ge=0)             # pet box grown by this share of its size per side
+    crop_max_area: float = Field(gt=0, le=1)     # no crop when the grown box covers more than this
+    questions: dict[str, GuardQuestion] = Field(min_length=1)
+
+
 class Gate2Settings(StrictModel):
     version: str
     enforce: bool
@@ -381,6 +406,7 @@ class Gate2Settings(StrictModel):
     nsfw: Gate2NsfwSettings
     text: Gate2TextSettings
     audio: Gate2AudioSettings
+    guard: Gate2GuardSettings
 
     @model_validator(mode="after")
     def policy_is_consistent(self):
@@ -418,6 +444,12 @@ class Gate2Settings(StrictModel):
         for signal in self.nsfw.levels:
             if signal not in self.signals or self.signals[signal].dimension != "D2_nsfw":
                 raise ValueError(f"gate2.nsfw.levels: {signal} is not a D2 signal")
+        for name, question in self.guard.questions.items():
+            unknown = {question.signal, question.review_signal} - set(self.signals)
+            if unknown:
+                raise ValueError(f"gate2.guard.questions.{name} names unknown signals: {sorted(unknown)}")
+            if not self.signals[question.review_signal].review:
+                raise ValueError(f"gate2.guard.questions.{name}: review_signal must be a review signal")
         return self
 
 
@@ -473,6 +505,8 @@ def load_settings(path: Path = CONFIG_FILE) -> AppSettings:
     data["ml"]["device"] = os.getenv("ML_DEVICE", data["ml"]["device"])
     data["ml"]["dtype"] = os.getenv("ML_DTYPE", data["ml"]["dtype"])
     data["prepare"]["ffmpeg_hwaccel"] = os.getenv("FFMPEG_HWACCEL", data["prepare"]["ffmpeg_hwaccel"])
+    # The guard model (~8 GB) is off on the laptop and switched on for GPU runs: GUARD_MODEL=shieldstral
+    data["ml"]["guard_model"] = os.getenv("GUARD_MODEL", data["ml"]["guard_model"]) or None
 
 
     return AppSettings.model_validate(data)

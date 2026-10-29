@@ -17,6 +17,7 @@ from app.prepare.audio import load_audio
 from app.gates.detection import detect_animals, detector_frame_indices
 from app.gates.gate1 import run_gate1
 from app.gates.gate2 import FrameSignals, score_gate2
+from app.gates.guard import guard_frames, run_guard
 from app.gates.items import item_signals
 from app.gates.nsfw import nsfw_signals
 from app.gates.quality import frame_quality, jpeg_quality
@@ -24,8 +25,8 @@ from app.gates.relevance import score_relevance
 from app.gates.scene import SceneResult, score_scene
 from app.gates.text import text_hits, text_signals
 from app.ml.registry import (
-    get_ai_model, get_audio_model, get_backbone, get_detector, get_nsfw_model, get_ocr, get_species_model,
-    get_speech_model,
+    get_ai_model, get_audio_model, get_backbone, get_detector, get_guard_model, get_nsfw_model, get_ocr,
+    get_species_model, get_speech_model,
 )
 from app.pipeline.context import ModerationContext
 from app.prepare import prepare_media
@@ -280,6 +281,16 @@ def run_gate2(ctx: ModerationContext, backbone) -> None:
     elif settings.ml.nsfw_model:
         ctx.flags.append("nsfw_unavailable")  # failed to load: never approve without it
 
+    guard = get_guard_model()
+    if guard is not None:
+        indices = guard_frames(len(ctx.prepared.frames), ctx.content_type == "video")
+        pictures = [ctx.prepared.frames[i].detector for i in indices]
+        boxes = [ctx.detections[i].box if i in ctx.detections else None for i in indices]
+        with timed(ctx, "guard"):
+            ctx.guard = dict(zip(indices, run_guard(guard, pictures, boxes)))
+    elif settings.ml.guard_model:
+        ctx.flags.append("guard_unavailable")  # failed to load: never approve without it
+
     ocr = get_ocr()
     if ocr is not None:
         picks = spread_frames(ctx, settings.gate2.text.ocr.video_frames)
@@ -312,6 +323,8 @@ def run_gate2(ctx: ModerationContext, backbone) -> None:
                 found |= item_signals(ctx.detections[i].items)
             if i in ctx.nsfw:
                 found |= nsfw_signals(ctx.nsfw[i])
+            if i in ctx.guard:  # D1-D4 policy questions (Shieldstral)
+                found |= ctx.guard[i].signals
             if i in ctx.ocr_text:  # text on the picture (meme captions, overlays)
                 found |= text_signals(ctx.ocr_text[i])
             if ctx.audio:  # spec 6.2: the soundtrack belongs to every moment of the video
@@ -345,7 +358,7 @@ def apply_gate2(ctx: ModerationContext) -> None:
         return
     if ctx.gate1.outcome != "pass" or ctx.gate1.wild:
         return  # Gate 1 already sent it to a human
-    if "nsfw_unavailable" in ctx.flags:
+    if "nsfw_unavailable" in ctx.flags or "guard_unavailable" in ctx.flags:
         return
     if settings.gate1.enforce and settings.gate2.enforce:
         if settings.gate2.flag_zero_shot:
@@ -366,16 +379,27 @@ def log_gate2(ctx: ModerationContext) -> None:
     contexts = sorted({c for scene in ctx.scene for c in scene.contexts})
     gate2_logger.info(
         "content_id=%s verdict=%s composite=%s D1=%s D2=%s D3=%s D4=%s D5=%s (%s) D6=%s (%s %.2f) "
-        "signals=%s contexts=%s nsfw=%s text_words=%d sounds=%s speech_words=%s frames=%d",
+        "signals=%s contexts=%s nsfw=%s guard=%s text_words=%d sounds=%s speech_words=%s frames=%d",
         ctx.content_id, ctx.verdict.decision, show(ctx.verdict.composite_score),
         show(d["D1_welfare"]), show(d["D2_nsfw"]), show(d["D3_violence"]), show(d["D4_prohibited"]),
         show(d["D5_quality"]), issue, show(d["D6_relevance"]), kind, sure,
         ",".join(ctx.gate2.fired) or "-", ",".join(contexts) or "-",
         f"{max(ctx.nsfw.values()):.2f}" if ctx.nsfw else "-",
+        guard_summary(ctx),
         sum(len(text_hits(t)) for t in ctx.ocr_text.values()),  # how many, never the words
         ctx.audio.sounds if ctx.audio else "-", ctx.audio.speech_words if ctx.audio else "-",
         len(ctx.quality),
     )
+
+
+def guard_summary(ctx: ModerationContext) -> str:
+    """Highest score per policy question over the frames, e.g. distress:0.46,hurt:0.12 (scores only)."""
+    best: dict[str, float] = {}
+    for result in ctx.guard.values():
+        for name, value in result.scores.items():
+            best[name] = max(value, best.get(name, 0.0))
+    top = sorted(best.items(), key=lambda kv: -kv[1])[:4]
+    return ",".join(f"{name}:{value:.2f}" for name, value in top) or "-"
 
 
 def log_gate1(ctx: ModerationContext) -> None:
