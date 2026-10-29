@@ -43,9 +43,14 @@ class GuardModel:
         from transformers import Mistral3ForConditionalGeneration, MistralCommonBackend
 
         self.tokenizer = MistralCommonBackend.from_pretrained(self.spec.repo, revision=self.spec.revision)
+        # Straight onto the GPU: loading the ~8 GB to RAM first was killed on a Colab T4 (12.7 GB RAM)
+        # with the other models already loaded.
+        on_gpu = {"device_map": str(self.device)} if self.device.type == "cuda" else {}
         self.model = Mistral3ForConditionalGeneration.from_pretrained(
-            self.spec.repo, revision=self.spec.revision, dtype=self.dtype
-        ).eval().to(self.device)
+            self.spec.repo, revision=self.spec.revision, dtype=self.dtype, **on_gpu
+        ).eval()
+        if not on_gpu:
+            self.model.to(self.device)
         logger.info("%s loaded (%s @ %s, %s)", self.name, self.spec.repo, self.spec.revision[:7], self.dtype)
 
     def warmup(self) -> None:
