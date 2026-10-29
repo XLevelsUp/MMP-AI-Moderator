@@ -280,6 +280,23 @@ def test_wild_name_next_to_a_pet_is_not_wild():
     assert result.wild is False
 
 
+def test_two_views_agreeing_on_wild_go_to_review():
+    # gate1-fused-0.6.1: a dolphin photo with BioCLIP unsure (0.37) was approved; the detector box
+    # ("dolphin") and SigLIP (marine_mammals) both said dolphin.
+    detections = [FrameDetections(0.9, "dolphin", ["dolphin"], 0.37)]
+    result = run_gate1(row(**{"animal__marine_mammals": 0.3, "photo__": 0.3})[None, :], LABELS, SCALE, False, detections)
+
+    assert result.wild is True
+
+
+def test_one_view_saying_wild_is_not_enough():
+    # Only the detector's box says "badger"; SigLIP sees a dog, no wild scene.
+    detections = [FrameDetections(0.9, "badger", ["badger"], 0.2)]
+    result = run_gate1(row(**{"animal__dogs_SLASH_a dog": 0.3, "photo__": 0.3})[None, :], LABELS, SCALE, False, detections)
+
+    assert result.wild is False
+
+
 def test_lookalike_boxes_never_count_as_animals():
     figurine = Box(0.9, "ceramic figurine", (10.0, 10.0, 50.0, 50.0), animal=False)
 

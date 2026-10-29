@@ -170,7 +170,7 @@ gate1:
   # Bump when the Gate 1 logic changes. model_version = this + model + revision + a
   # fingerprint of every decision-relevant setting, so editing a sentence or a threshold
   # automatically gives a new model_version (and a new cache key).
-  version: gate1-fused-0.6   # 0.6: wild only when BioCLIP is sure and no pet is seen, else wild scene; sea animals out; 0.5: wild-animal list -> always review; 0.4: look-alike queries, confident-species bar, marine always review
+  version: gate1-fused-0.6.1   # 0.6.1: 2 of 3 views agreeing on wild -> review; 0.6: wild only when BioCLIP is sure and no pet is seen, else wild scene; sea animals out; 0.5: wild-animal list -> always review; 0.4: look-alike queries, confident-species bar, marine always review
   # true = act on Gate 1 (MOD_001 rejections). false = shadow mode: compute and flag only,
   # decision stays HUMAN_REVIEW. The POC runs live; production can start in shadow mode.
   enforce: true
@@ -262,6 +262,9 @@ gate1:
   # A wild / marine species name alone sends a photo to review only from this confidence
   # (0.6: BioCLIP named a hamster in hands "otter" and aquarium fish "stingray").
   wild_species_min_confidence: 0.7
+  # Below that bar, SigLIP's idea, the detector's box name and a confident BioCLIP name vote: this many
+  # must say wild / marine (0.6.1: a dolphin with BioCLIP 0.37 was approved).
+  wild_min_sources: 2
   # Names the detector looks for and BioCLIP chooses from -> the spec 2.1 category of each.
   # These names are what the API returns in species_detected.
   species:

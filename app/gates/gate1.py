@@ -99,10 +99,12 @@ def fuse(siglip_score: float, det_max: float) -> float:
     return f.detector_weight * detector_score(det_max) + f.siglip_weight * siglip_score
 
 
-def is_wild(category: str, wild_scene: bool, det: FrameDetections | None) -> bool:
+def is_wild(category: str, siglip_category: str, wild_scene: bool, det: FrameDetections | None) -> bool:
     """Spec 2.1: wild animals and marine mammals are never pets -> HUMAN_REVIEW. A sure BioCLIP
-    name decides alone unless a pet species is also in the picture; SigLIP's idea or an unsure
-    name also needs a wild scene (a blurred dog in a field must not become a "badger")."""
+    name decides alone unless a pet species is also in the picture. Otherwise the three views
+    (SigLIP's idea, the detector's box name, a confident BioCLIP name) vote: wild_min_sources of
+    them must agree (a dolphin named only 0.37 by BioCLIP, but "dolphin" by the other two). One
+    view alone also needs a wild scene (a blurred dog in a field must not become a "badger")."""
     g = settings.gate1
     review = g.always_review_categories
     if (
@@ -112,6 +114,13 @@ def is_wild(category: str, wild_scene: bool, det: FrameDetections | None) -> boo
     ):
         pet_check = review + g.wild_check_categories
         return not any(g.species.get(s) not in pet_check for s in det.species[1:])
+    views = [siglip_category]
+    if det is not None:
+        views.append(g.species.get(det.det_label))
+        if det.species and det.species_confidence >= g.species_category_min_confidence:
+            views.append(g.species.get(det.species[0]))
+    if sum(v in review for v in views) >= g.wild_min_sources:
+        return True
     return wild_scene and category in g.wild_check_categories + review
 
 
@@ -141,7 +150,7 @@ def score_frames(
     frames = []
     for i in range(sims.shape[0]):
         name = animal_names[best_animal[i]]
-        category = name.split("/")[0]
+        siglip_category = category = name.split("/")[0]
         det = detections[i] if detections is not None else None
         if det is not None and det.species and det.species_confidence >= g.species_category_min_confidence:
             category = g.species[det.species[0]]  # a confident species model knows better than SigLIP
@@ -159,7 +168,7 @@ def score_frames(
             threshold=threshold,
             illustrated=bool(illustrated[i]),
             insect=insect,
-            wild=is_wild(category, bool(wild[i]), det),
+            wild=is_wild(category, siglip_category, bool(wild[i]), det),
             best_animal=name,
             best_no_pet=no_pet_names[best_no_pet[i]],
             animal_similarity=float(animal[i].max()),

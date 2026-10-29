@@ -199,6 +199,7 @@ class Gate1Settings(StrictModel):
     species_min_confidence: float = Field(ge=0, le=1)
     species_category_min_confidence: float = Field(ge=0, le=1)
     wild_species_min_confidence: float = Field(ge=0, le=1)
+    wild_min_sources: int = Field(ge=1, le=3)
     species: dict[str, str]   # species name -> spec 2.1 category
 
     @model_validator(mode="after")
