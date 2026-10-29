@@ -387,6 +387,7 @@ class Gate2GuardSettings(StrictModel):
     batch_size: int = Field(ge=1)                # questions per GPU pass
     crop_margin: float = Field(ge=0)             # pet box grown by this share of its size per side
     crop_max_area: float = Field(gt=0, le=1)     # no crop when the grown box covers more than this
+    crop_min_side: int = Field(ge=1)             # no crop when the grown box is smaller than this (px)
     questions: dict[str, GuardQuestion] = Field(min_length=1)
 
 

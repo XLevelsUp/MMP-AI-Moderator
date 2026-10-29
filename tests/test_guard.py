@@ -102,6 +102,11 @@ def test_no_crop_when_the_pet_fills_the_picture():
     assert pet_crop(picture, None) is None
 
 
+def test_no_crop_when_the_pet_box_is_tiny():
+    picture = Image.new("RGB", (640, 480))
+    assert pet_crop(picture, (300, 200, 310, 210)) is None   # 10 px box -> 20 px crop
+
+
 def test_views_are_full_frame_plus_crop_at_most_image_size():
     picture = Image.new("RGB", (1280, 960))
     views = guard_views(picture, (500, 400, 700, 600))

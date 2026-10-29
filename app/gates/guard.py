@@ -66,8 +66,8 @@ def pet_crop(picture: Image.Image, box: tuple[float, float, float, float] | None
     grow_x, grow_y = (x1 - x0) * cfg.crop_margin, (y1 - y0) * cfg.crop_margin
     left, top = max(0.0, x0 - grow_x), max(0.0, y0 - grow_y)
     right, bottom = min(float(width), x1 + grow_x), min(float(height), y1 + grow_y)
-    if right - left < 1 or bottom - top < 1:
-        return None
+    if min(right - left, bottom - top) < cfg.crop_min_side:
+        return None   # too small to add anything (a ~28 px crop is one picture token and broke the model)
     if (right - left) * (bottom - top) > cfg.crop_max_area * width * height:
         return None
     return picture.crop((int(left), int(top), int(round(right)), int(round(bottom))))

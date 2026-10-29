@@ -817,6 +817,7 @@ gate2:
     batch_size: 11        # questions per GPU pass (one picture per pass); lower it if a GPU runs out of memory
     crop_margin: 0.5      # pet box grown by half its width / height on each side
     crop_max_area: 0.6    # no crop when that covers most of the picture anyway
+    crop_min_side: 64     # no crop below this many pixels (a 1-token crop broke the model on a T4 run)
     questions:
       any_harm:
         text: Does this image show violence, injury, cruelty or harm to any animal or person?
