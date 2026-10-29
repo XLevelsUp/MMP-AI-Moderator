@@ -412,7 +412,7 @@ targets:   # spec MMP-MOD-2026-001, non-functional requirements
 
 gate2:
   # Bump when the Gate 2 logic changes. Part of model_version, like gate1.version.
-  version: gate2-0.19  # 0.19: guard 448 px, cages are normal, suspicious video frames, review band needs 2 frames; 0.18.1: guard questions batched; 0.18: Shieldstral policy questions (gate2.guard) + detector crops; 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
+  version: gate2-0.19.1  # 0.19.1: guard thresholds re-set for 448 px + crops; 0.19: guard 448 px, cages are normal, suspicious video frames, review band needs 2 frames; 0.18.1: guard questions batched; 0.18: Shieldstral policy questions (gate2.guard) + detector crops; 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
   # true = act on Gate 2 (rejections, reviews, approvals). false = shadow mode: scores are
   # computed, reported and logged, nothing is approved, and a Gate 2 rejection only adds
   # the flag gate2_would_reject.
@@ -798,7 +798,10 @@ gate2:
   # question: the full frame, plus a crop around the detector's pet box grown to include whoever is
   # handling the animal (the crop lifted a bite moment from 0.10 to 0.42). Score >= act_from fires
   # the question's signal; review_from..act_from fires its review_signal (a human looks).
-  # Thresholds set 2026-10-29 from 265 safe photos (D:/samples/safety_check + Gate 1 pet sets):
+  # Thresholds re-set 2026-10-29 for 448 px + crops with scripts/guard_calibrate.py on 264 safe photos
+  # (D:/samples/safety_check + Gate 1 pet sets; play fighting left out, review is intended there).
+  # weapon kept at 0.30: the calibrator's 0.45 came from toy guns without a pet, which Gate 1 rejects.
+  # First set the same day at 640 px without crops:
   # review_from sits above normal photos (at most ~1% to review); act_from stays at the model-card
   # 0.5 until trust-and-safety examples set it from the spec 9.3 recall targets. The questions are
   # one fixed list written from the policy, never tuned to a single test file.
@@ -827,7 +830,7 @@ gate2:
         review_signal: guard_concern_violence
       hurt:
         text: Is an animal being hit, kicked, thrown or otherwise hurt by a person?
-        review_from: 0.30
+        review_from: 0.45
         act_from: 0.5
         signal: welfare_abuse
         review_signal: guard_concern_welfare
@@ -835,25 +838,25 @@ gate2:
         text: >-
           Is an animal visibly frightened, panicking or in acute distress, for example cowering,
           screaming or struggling to escape?
-        review_from: 0.25
+        review_from: 0.20
         act_from: 0.5
         signal: welfare_distress
         review_signal: guard_concern_welfare
       restrained:
         text: Is an animal chained, tied or caged in a cruel way?
-        review_from: 0.35   # crates with a mother and babies reached 0.79 / 0.60
+        review_from: 0.40
         act_from: 0.5
         signal: welfare_painful_restraint
         review_signal: guard_concern_welfare
       neglect:
         text: Does an animal look starved, badly injured or neglected?
-        review_from: 0.30
+        review_from: 0.35
         act_from: 0.5
         signal: welfare_neglect
         review_signal: guard_concern_welfare
       sexual:
         text: Does the image show nudity or sexual content?
-        review_from: 0.20
+        review_from: 0.15
         act_from: 0.5
         signal: nsfw_sexual_human
         review_signal: guard_concern_nsfw

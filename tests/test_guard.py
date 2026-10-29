@@ -115,11 +115,11 @@ def test_views_are_full_frame_plus_crop_at_most_image_size():
 
 
 def test_the_higher_of_full_frame_and_crop_counts():
-    # the bite moment: full frame hurt 0.05, crop around the dog and groomer 0.42
-    [result] = run_guard(FakeGuard({"hurt": 0.05}, crop={"hurt": 0.42}),
+    # the bite moment: full frame any_harm 0.10, crop around the dog and groomer 0.40
+    [result] = run_guard(FakeGuard({"any_harm": 0.10}, crop={"any_harm": 0.40}),
                          [Image.new("RGB", (640, 480))], [(300, 200, 400, 300)])
-    assert result.scores["hurt"] == 0.42
-    assert result.signals == {"guard_concern_welfare"}
+    assert result.scores["any_harm"] == 0.40
+    assert result.signals == {"guard_concern_violence"}
 
 
 # --- settings checks ---
