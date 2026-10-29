@@ -15,18 +15,35 @@ from app.core.config import settings
 @dataclass
 class GuardResult:
     scores: dict[str, float] = field(default_factory=dict)   # question -> best score over the views
-    signals: set[str] = field(default_factory=set)
+    signals: set[str] = field(default_factory=set)           # act_from signals + review-band signals
+    review: set[str] = field(default_factory=set)            # the review-band ones among them
 
 
-def guard_frames(count: int, is_video: bool) -> list[int]:
-    """Which prepared frames are asked: the one image, or gate2.guard.video_frames of a video
-    spread from the first to the last frame."""
-    if not is_video or count <= 1:
-        return [0]
-    wanted = min(settings.gate2.guard.video_frames, count)
-    if wanted == 1:
+def spread(count: int, wanted: int) -> list[int]:
+    if wanted <= 1:
         return [0]
     return sorted({round(i * (count - 1) / (wanted - 1)) for i in range(wanted)})
+
+
+def guard_frames(count: int, is_video: bool, suspicion=None) -> list[int]:
+    """Which prepared frames are asked. An image: its one frame. A video: video_frames in all;
+    the video_suspicious frames SigLIP finds most suspicious, each with the frame after it (a
+    problem lasts more than one frame, see video_review_min_frames), and the rest spread from
+    the first to the last frame. Without SigLIP scores: all of them spread."""
+    if not is_video or count <= 1:
+        return [0]
+    cfg = settings.gate2.guard
+    wanted = min(cfg.video_frames, count)
+    if suspicion is None:
+        return spread(count, wanted)
+    chosen: set[int] = set()
+    for i in sorted(range(count), key=lambda i: -float(suspicion[i])):
+        if len(chosen) >= min(2 * cfg.video_suspicious, wanted):
+            break
+        chosen |= {i, min(i + 1, count - 1)}
+    if len(chosen) < wanted:   # the remaining places spread over the whole video, first to last frame
+        chosen |= set(spread(count, wanted - len(chosen)))
+    return sorted(chosen)
 
 
 def fit(picture: Image.Image) -> Image.Image:
@@ -61,16 +78,32 @@ def guard_views(picture: Image.Image, box) -> list[Image.Image]:
     return [fit(picture)] + ([fit(crop)] if crop is not None else [])
 
 
-def guard_signals(scores: dict[str, float]) -> set[str]:
-    """Each question's signal from act_from, its review_signal from review_from."""
-    found = set()
+def guard_signals(scores: dict[str, float]) -> tuple[set[str], set[str]]:
+    """Each question's signal from act_from, its review_signal from review_from: (act, review)."""
+    act, review = set(), set()
     for name, question in settings.gate2.guard.questions.items():
         value = scores.get(name, 0.0)
         if value >= question.act_from:
-            found.add(question.signal)
+            act.add(question.signal)
         elif value >= question.review_from:
-            found.add(question.review_signal)
-    return found
+            review.add(question.review_signal)
+    return act, review
+
+
+def steady_review(results: list[GuardResult]) -> list[GuardResult]:
+    """Video: a review-band signal counts only where it shows in at least video_review_min_frames
+    of the asked frames (one borderline frame out of many is noise; spec 6.3 also judges a video
+    by runs of frames). Signals from act_from always count."""
+    need = settings.gate2.guard.video_review_min_frames
+    seen: dict[str, int] = {}
+    for result in results:
+        for signal in result.review:
+            seen[signal] = seen.get(signal, 0) + 1
+    for result in results:
+        dropped = {s for s in result.review if seen[s] < need}
+        result.review -= dropped
+        result.signals -= dropped
+    return results
 
 
 def run_guard(model, pictures: list[Image.Image], boxes: list) -> list[GuardResult]:
@@ -83,5 +116,6 @@ def run_guard(model, pictures: list[Image.Image], boxes: list) -> list[GuardResu
         for view_scores in model.scores(guard_views(picture, box), questions, cfg.instruct):
             for name, value in view_scores.items():
                 best[name] = max(value, best.get(name, 0.0))
-        results.append(GuardResult(scores=best, signals=guard_signals(best)))
+        act, review = guard_signals(best)
+        results.append(GuardResult(scores=best, signals=act | review, review=review))
     return results

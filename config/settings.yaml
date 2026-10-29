@@ -412,7 +412,7 @@ targets:   # spec MMP-MOD-2026-001, non-functional requirements
 
 gate2:
   # Bump when the Gate 2 logic changes. Part of model_version, like gate1.version.
-  version: gate2-0.18.1  # 0.18.1: guard questions batched; 0.18: Shieldstral policy questions (gate2.guard) + detector crops; 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
+  version: gate2-0.19  # 0.19: guard 448 px, cages are normal, suspicious video frames, review band needs 2 frames; 0.18.1: guard questions batched; 0.18: Shieldstral policy questions (gate2.guard) + detector crops; 0.17: distress always reviewed, new aggression signal (review), unclear fights -> aggression not hard; 0.16: no "toy gun" escape, pistol to the head; 0.15: chained performing animals; 0.14: slaughterhouse / carcasses; 0.13: stick abuse + fetch safe sentences; 0.12: video audio (sounds + speech); 0.11: text on images (OCR + word lists); 0.10: nude art; 0.9: swimwear / shirtless with a pet; 0.8: real dog fights; 0.7: nudity sentences; 0.6: suggestive pose + spiked muzzle; 0.5: NSFW on detector frames only; 0.4: D1-D3; 0.3: D4 items; 0.2: D5 + D6
   # true = act on Gate 2 (rejections, reviews, approvals). false = shadow mode: scores are
   # computed, reported and logged, nothing is approved, and a Gate 2 rejection only adds
   # the flag gate2_would_reject.
@@ -808,10 +808,12 @@ gate2:
     instruct: >-
       You moderate photos for a pet social app. Normal pet life is NOT a violation by itself: play
       fighting, tug-of-war, vet care (cones, bandages, injections), grooming and baths, raw pet food,
-      mothers nursing, leashes, harnesses, crates, toys and costumes. Judge the animal's behaviour and
-      condition, not only the setting.
-    image_size: 640       # long side; 1024 barely helped (aggression 0.09 -> 0.15) at 2.5x the cost
-    video_frames: 12      # spread from start to end
+      mothers nursing, leashes, harnesses, crates, bird cages, hutches, aquariums and terrariums, toys
+      and costumes. Judge the animal's behaviour and condition, not only the setting.
+    image_size: 448       # long side (~half the picture tokens of 640); 1024 barely helped (aggression 0.09 -> 0.15)
+    video_frames: 12      # frames asked per video (a 12-frame blind spread missed a bite at 2.5 s and distress at 29 s)
+    video_suspicious: 3   # of those: SigLIP's 3 most suspicious moments, each with the next frame; the rest spread
+    video_review_min_frames: 2   # a review-band score in one frame only is noise (a promo video: aggression 0.32 once)
     batch_size: 11        # questions per GPU pass (one picture per pass); lower it if a GPU runs out of memory
     crop_margin: 0.5      # pet box grown by half its width / height on each side
     crop_max_area: 0.6    # no crop when that covers most of the picture anyway

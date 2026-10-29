@@ -46,6 +46,15 @@ def columns(labels: list[str], group: str) -> dict[str, list[int]]:
     return found
 
 
+def scene_suspicion(sims: np.ndarray, labels: list[str], scale: float, bias: float) -> np.ndarray | None:
+    """Per picture: SigLIP's highest yes-probability for any harm sentence, before the safe-sentence
+    veto. Used to pick which video frames the (slower) guard model looks at."""
+    harm = [c for cols in columns(labels, HARM).values() for c in cols]
+    if not harm:
+        return None
+    return (1.0 / (1.0 + np.exp(-(sims[:, harm] * scale + bias)))).max(axis=1)
+
+
 def score_scene(sims: np.ndarray, labels: list[str], scale: float, bias: float) -> list[SceneResult] | None:
     """One result per picture; None if the backbone was loaded without the scene sentences."""
     safe, harm, contexts = columns(labels, SAFE), columns(labels, HARM), columns(labels, CONTEXT)

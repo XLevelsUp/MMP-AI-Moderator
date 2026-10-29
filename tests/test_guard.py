@@ -3,7 +3,7 @@ import pytest
 from PIL import Image
 
 from app.core.config import Gate2Settings, settings
-from app.gates.guard import guard_frames, guard_signals, guard_views, pet_crop, run_guard
+from app.gates.guard import GuardResult, guard_frames, guard_signals, guard_views, pet_crop, run_guard, steady_review
 from app.pipeline import orchestrator
 from tests.test_gate1 import make_ctx
 from tests.test_gate2_pipeline import PERSONAL, with_model  # noqa: F401
@@ -39,22 +39,22 @@ def guard_sees(monkeypatch):
 # --- scores -> signals ---
 
 def test_low_scores_give_no_signal():
-    assert guard_signals({"distress": 0.15, "gore": 0.1}) == set()
+    assert guard_signals({"distress": 0.15, "gore": 0.1}) == (set(), set())
 
 
 def test_review_band_gives_the_review_signal():
     # the stressed husky at the groomer: distress 0.46 (review_from 0.25, act_from 0.5)
-    assert guard_signals({"distress": 0.46}) == {"guard_concern_welfare"}
+    assert guard_signals({"distress": 0.46}) == (set(), {"guard_concern_welfare"})
 
 
 def test_from_act_from_the_question_signal_fires():
-    assert guard_signals({"distress": 0.7}) == {"welfare_distress"}
-    assert guard_signals({"fight": 0.9}) == {"welfare_fighting"}   # organised fighting: hard
+    assert guard_signals({"distress": 0.7}) == ({"welfare_distress"}, set())
+    assert guard_signals({"fight": 0.9}) == ({"welfare_fighting"}, set())   # organised fighting: hard
 
 
 def test_crate_with_puppies_stays_below_restrained_review():
     # safe photos: crates with a mother and babies reached 0.33; review_from is 0.35
-    assert guard_signals({"restrained": 0.33}) == set()
+    assert guard_signals({"restrained": 0.33}) == (set(), set())
 
 
 # --- frames and crops ---
@@ -64,6 +64,30 @@ def test_image_asks_its_one_frame_video_spreads_frames():
     picks = guard_frames(61, is_video=True)
     assert picks[0] == 0 and picks[-1] == 60
     assert len(picks) == settings.gate2.guard.video_frames
+
+
+def test_video_asks_the_most_suspicious_moments_and_the_next_frame():
+    # a bite at 2.5 s and distress at 29 s fell between the blind 5-second steps
+    suspicion = [0.01] * 61
+    suspicion[2], suspicion[29], suspicion[45] = 0.8, 0.7, 0.6
+    picks = guard_frames(61, is_video=True, suspicion=suspicion)
+    assert {2, 3, 29, 30, 45, 46} <= set(picks)
+    assert 0 in picks and 60 in picks              # the rest still spread over the video
+    assert len(picks) <= settings.gate2.guard.video_frames + 1
+
+
+def test_one_borderline_video_frame_is_noise_two_are_not():
+    once = [GuardResult(signals={"guard_concern_violence"}, review={"guard_concern_violence"}),
+            GuardResult(), GuardResult()]
+    assert all(not r.signals for r in steady_review(once))
+    twice = [GuardResult(signals={"guard_concern_welfare"}, review={"guard_concern_welfare"}),
+             GuardResult(signals={"guard_concern_welfare"}, review={"guard_concern_welfare"})]
+    assert all(r.signals == {"guard_concern_welfare"} for r in steady_review(twice))
+
+
+def test_a_strong_answer_counts_from_one_frame():
+    results = [GuardResult(signals={"welfare_abuse"}), GuardResult(), GuardResult()]
+    assert steady_review(results)[0].signals == {"welfare_abuse"}
 
 
 def test_crop_grows_the_pet_box_to_take_in_the_handler():

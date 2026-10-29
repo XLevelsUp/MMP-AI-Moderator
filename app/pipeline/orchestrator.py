@@ -17,12 +17,12 @@ from app.prepare.audio import load_audio
 from app.gates.detection import detect_animals, detector_frame_indices
 from app.gates.gate1 import run_gate1
 from app.gates.gate2 import FrameSignals, score_gate2
-from app.gates.guard import guard_frames, run_guard
+from app.gates.guard import guard_frames, run_guard, steady_review
 from app.gates.items import item_signals
 from app.gates.nsfw import nsfw_signals
 from app.gates.quality import frame_quality, jpeg_quality
 from app.gates.relevance import score_relevance
-from app.gates.scene import SceneResult, score_scene
+from app.gates.scene import SceneResult, scene_suspicion, score_scene
 from app.gates.text import text_hits, text_signals
 from app.ml.registry import (
     get_ai_model, get_audio_model, get_backbone, get_detector, get_guard_model, get_nsfw_model, get_ocr,
@@ -283,11 +283,17 @@ def run_gate2(ctx: ModerationContext, backbone) -> None:
 
     guard = get_guard_model()
     if guard is not None:
-        indices = guard_frames(len(ctx.prepared.frames), ctx.content_type == "video")
+        is_video = ctx.content_type == "video"
+        suspicion = None
+        if is_video:  # SigLIP already read every frame: its harm sentences point at the moments to check
+            sims = backbone.similarities(ctx.embeddings)
+            suspicion = scene_suspicion(sims, backbone.labels, backbone.scale, backbone.bias)
+        indices = guard_frames(len(ctx.prepared.frames), is_video, suspicion)
         pictures = [ctx.prepared.frames[i].detector for i in indices]
         boxes = [ctx.detections[i].box if i in ctx.detections else None for i in indices]
         with timed(ctx, "guard"):
-            ctx.guard = dict(zip(indices, run_guard(guard, pictures, boxes)))
+            results = run_guard(guard, pictures, boxes)
+            ctx.guard = dict(zip(indices, steady_review(results) if is_video else results))
     elif settings.ml.guard_model:
         ctx.flags.append("guard_unavailable")  # failed to load: never approve without it
 

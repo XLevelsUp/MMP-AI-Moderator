@@ -381,7 +381,9 @@ class GuardQuestion(StrictModel):
 class Gate2GuardSettings(StrictModel):
     instruct: str                                # context sent with every question
     image_size: int = Field(ge=64)               # long side of each picture sent to the model
-    video_frames: int = Field(ge=1)              # frames of a video, spread from start to end
+    video_frames: int = Field(ge=1)              # frames of a video the model is asked about
+    video_suspicious: int = Field(ge=0)          # of those: SigLIP's most suspicious moments (+ next frame)
+    video_review_min_frames: int = Field(ge=1)   # a review-band signal must show in this many frames
     batch_size: int = Field(ge=1)                # questions per GPU pass
     crop_margin: float = Field(ge=0)             # pet box grown by this share of its size per side
     crop_max_area: float = Field(gt=0, le=1)     # no crop when the grown box covers more than this
