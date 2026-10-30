@@ -484,6 +484,13 @@ class AppSettings(StrictModel):
     ai_label: AiLabelSettings
     targets: TargetsSettings
 
+    @field_validator("temp_dir")
+    @classmethod
+    def temp_dir_in_project(cls, path: Path) -> Path:
+        # Relative paths are inside the project, so the same setting works on Windows and Linux
+        # (a Windows 'D:\...' path on Linux made ffmpeg read 'D:' as a protocol: every video failed).
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
 
 class UniqueKeyLoader(yaml.SafeLoader):
     """YAML normally lets a later duplicate key silently replace the first one."""

@@ -25,7 +25,7 @@ timeouts:
   frame_sample_seconds: 60
 
 
-temp_dir: 'D:\mmp-moderator-poc\data\tmp'
+temp_dir: data/tmp   # inside the project (data/ is not committed); same on Windows and Linux
 
 
 
