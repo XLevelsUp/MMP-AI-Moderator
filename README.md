@@ -1,8 +1,8 @@
-# MeetMyPets AI Moderation — Phase 1 POC
+# MeetMyPets AI Moderation — POC
 
-Local proof of concept: file validation and duplicate protection for
-`POST /api/v1/moderate` (spec MMP-MOD-2026-001). Gates 1 and 2 come in later phases;
-until then every valid file returns `HUMAN_REVIEW` with flag `validation_passed`.
+`POST /api/v1/moderate`: validation, Gate 1 (is there a pet?) and Gate 2 (is it safe and
+suitable?) for images and videos, all models self-hosted. **What is built, the measured
+results, known limitations and what is still missing: [docs/STATUS.md](docs/STATUS.md).**
 
 ## Setup (once)
 
