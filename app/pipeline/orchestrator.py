@@ -17,7 +17,7 @@ from app.prepare.audio import load_audio
 from app.gates.detection import detect_animals, detector_frame_indices
 from app.gates.gate1 import run_gate1
 from app.gates.gate2 import FrameSignals, score_gate2
-from app.gates.guard import guard_frames, run_guard, steady_review
+from app.gates.guard import focus_frames, guard_frames, run_guard, steady_review
 from app.gates.items import item_signals
 from app.gates.nsfw import nsfw_signals
 from app.gates.quality import frame_quality, jpeg_quality
@@ -288,9 +288,12 @@ def run_gate2(ctx: ModerationContext, backbone) -> None:
         if is_video:  # SigLIP already read every frame: its harm sentences point at the moments to check
             sims = backbone.similarities(ctx.embeddings)
             suspicion = scene_suspicion(sims, backbone.labels, backbone.scale, backbone.bias)
-        indices = guard_frames(len(ctx.prepared.frames), is_video, suspicion)
+        count = len(ctx.prepared.frames)
+        indices = guard_frames(count, is_video, suspicion)
+        # videos: the pet crop only on the suspicious moments; images and spread frames as before
+        cropped = focus_frames(count, suspicion) if suspicion is not None else set(indices)
         pictures = [ctx.prepared.frames[i].detector for i in indices]
-        boxes = [ctx.detections[i].box if i in ctx.detections else None for i in indices]
+        boxes = [ctx.detections[i].box if i in ctx.detections and i in cropped else None for i in indices]
         with timed(ctx, "guard"):
             results = run_guard(guard, pictures, boxes)
             ctx.guard = dict(zip(indices, steady_review(results) if is_video else results))

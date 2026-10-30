@@ -32,18 +32,27 @@ def guard_frames(count: int, is_video: bool, suspicion=None) -> list[int]:
     the first to the last frame. Without SigLIP scores: all of them spread."""
     if not is_video or count <= 1:
         return [0]
-    cfg = settings.gate2.guard
-    wanted = min(cfg.video_frames, count)
+    wanted = min(settings.gate2.guard.video_frames, count)
     if suspicion is None:
         return spread(count, wanted)
-    chosen: set[int] = set()
-    for i in sorted(range(count), key=lambda i: -float(suspicion[i])):
-        if len(chosen) >= min(2 * cfg.video_suspicious, wanted):
-            break
-        chosen |= {i, min(i + 1, count - 1)}
+    chosen = focus_frames(count, suspicion)
     if len(chosen) < wanted:   # the remaining places spread over the whole video, first to last frame
         chosen |= set(spread(count, wanted - len(chosen)))
     return sorted(chosen)
+
+
+def focus_frames(count: int, suspicion) -> set[int]:
+    """The video_suspicious frames SigLIP finds most suspicious, each with the frame after it.
+    Only these get the pet crop as well: the crop is what lifted a bite moment into the review band,
+    and asking it on every spread frame cost a quarter of the video's guard time."""
+    cfg = settings.gate2.guard
+    wanted = min(2 * cfg.video_suspicious, cfg.video_frames, count)
+    chosen: set[int] = set()
+    for i in sorted(range(count), key=lambda i: -float(suspicion[i])):
+        if len(chosen) >= wanted:
+            break
+        chosen |= {i, min(i + 1, count - 1)}
+    return chosen
 
 
 def fit(picture: Image.Image) -> Image.Image:

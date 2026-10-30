@@ -3,7 +3,7 @@ import pytest
 from PIL import Image
 
 from app.core.config import Gate2Settings, settings
-from app.gates.guard import GuardResult, guard_frames, guard_signals, guard_views, pet_crop, run_guard, steady_review
+from app.gates.guard import GuardResult, focus_frames, guard_frames, guard_signals, guard_views, pet_crop, run_guard, steady_review
 from app.pipeline import orchestrator
 from tests.test_gate1 import make_ctx
 from tests.test_gate2_pipeline import PERSONAL, with_model  # noqa: F401
@@ -74,6 +74,12 @@ def test_video_asks_the_most_suspicious_moments_and_the_next_frame():
     assert {2, 3, 29, 30, 45, 46} <= set(picks)
     assert 0 in picks and 60 in picks              # the rest still spread over the video
     assert len(picks) <= settings.gate2.guard.video_frames + 1
+
+
+def test_only_the_suspicious_moments_get_the_crop():
+    suspicion = [0.01] * 61
+    suspicion[2], suspicion[29], suspicion[45] = 0.8, 0.7, 0.6
+    assert focus_frames(61, suspicion) == {2, 3, 29, 30, 45, 46}
 
 
 def test_one_borderline_video_frame_is_noise_two_are_not():
