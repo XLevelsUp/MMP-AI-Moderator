@@ -1,6 +1,6 @@
 # MeetMyPets AI Moderation — POC status
 
-**As of 30 Oct 2026 · code `gate2-0.19.2` / `gate1-fused-0.6.1` · 497 tests passing**
+**As of 30 Oct 2026 · code `gate2-0.19.2` / `gate1-fused-0.7.1` · 497 tests passing**
 
 The moderation logic is close to its first production version: every upload goes through
 validation, Gate 1 (is there a pet?) and Gate 2 (is it safe and suitable?), and gets
@@ -85,9 +85,12 @@ real harmful examples set it from the spec's recall targets.
   trained head checking (2 Nov 2026) it is 2 (an empty planted aquarium, a closed carrier),
   approval precision 90.6% → 96.4%, no extra pets rejected, 4 more pets to review (two cartoons,
   a meme, a can label). The head alone is not ready to decide: it calls aquarium fish with glare,
-  a hamster in hands and a blurred running dog "wild", and rejects cartoons and memes — its
-  dataset (`D:\dataset`, 1,698 web photos) lacks those. Round 2: add them, or better, real app
-  photos from the review queue; rerun `scripts.head_embed` → `head_train` → `head_eval`.
+  a hamster in hands and a blurred running dog "wild", and rejects cartoons and memes. Round 2
+  (2 Nov, `gate1-fused-0.7.1`): 198 more web photos of exactly those kinds (1,896 in all,
+  held-back accuracy 98.9 %) did **not** fix those hard-case photos — same scores — so more web
+  photos will not get the head to decide alone; real app photos from the review queue are needed.
+  The round 2 head runs as the check at 0.7: same hard-case result as round 1 at 0.8 (2 / 3 / 6).
+  Retrain on Colab: `bash scripts/colab_head.sh` (≈ 15 min on a T4).
 
 The fix for the first three is a fine-tune of Shieldstral on moderator labels from the review queue.
 
@@ -116,4 +119,4 @@ Switches: `GUARD_MODEL` (Shieldstral on / off), `ML_DEVICE`, `ML_DTYPE`, `FFMPEG
 | Speed test on an L4, video tuning to < 15 s | spec target |
 | Catch-rate test on trust-and-safety examples, then `act_from` thresholds | spec recall targets |
 | Shadow mode, then live | prove agreement with moderators before auto-approval |
-| Gate 1 head round 2 (cartoons, memes, aquarium fish, pets in hands) so it can decide alone; Shieldstral fine-tune | the known limitations above |
+| Gate 1 head retrained on real app photos (web round 2 did not help) so it can decide alone; Shieldstral fine-tune | the known limitations above |

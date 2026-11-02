@@ -93,6 +93,13 @@ def main() -> None:
         print(f"  {classes[truth[i]]:>6} -> {classes[predicted[i]]:<6} {files[row]}")
     print("by kind:", dict(wrong.most_common()))
 
+    print("\nheld-back accuracy by kind (photos / spoiled copies):")
+    for kind in sorted(set(kinds[test_orig].tolist())):
+        orig = test_orig[kinds[test_orig] == kind]
+        spoiled = test_spoiled[kinds[test_spoiled] == kind]
+        spoiled_acc = f"{(model.predict(x[spoiled]) == y[spoiled]).mean():.2f}" if len(spoiled) else "-"
+        print(f"  {kind:45} {(model.predict(x[orig]) == y[orig]).mean():.2f} of {len(orig):<4} {spoiled_acc}")
+
     final = fit(x, y, best_c)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez(

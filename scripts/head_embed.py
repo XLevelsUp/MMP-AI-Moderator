@@ -9,6 +9,7 @@ learns that a bad phone photo of a dog is still a dog. Exact duplicate files are
 
     uv run python -m scripts.head_embed D:/dataset            -> data/gate1_head/embeddings.npz
     uv run python -m scripts.head_embed D:/dataset --copies 0  (no spoiled copies)
+    ML_DEVICE=cuda ML_DTYPE=float16 python -m scripts.head_embed /content/dataset   (Colab, ~5 min on a T4)
 
 Never point this at D:/samples/hard_case_clean: that is the test set.
 """
@@ -96,7 +97,7 @@ def main() -> None:
     out = {k: [] for k in ("siglip", "bioclip", "label", "group", "spoiler", "files", "kind")}
     started = perf_counter()
     for n, row in enumerate(rows):
-        path = args.root / row["file"]
+        path = args.root / row["file"].replace("\\", "/")   # labels.csv is written on Windows
         digest = hashlib.md5(path.read_bytes()).hexdigest()
         if digest in seen:
             continue
