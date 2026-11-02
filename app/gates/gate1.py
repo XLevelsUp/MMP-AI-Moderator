@@ -39,6 +39,7 @@ class FrameVerdict:
     det_label: str | None = None
     species: list[str] = field(default_factory=list)
     lookalike: str | None = None
+    head: dict[str, float] | None = None   # the trained head's pet / wild / no_pet (decider: head)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class Gate1Result:
     pass_fraction: float  # share of frames that passed (1.0 / 0.0 for an image)
     frames: list[FrameVerdict]
     species: list[str] = field(default_factory=list)  # for species_detected
+    head_doubt: bool = False   # decider check: the rules passed, the head saw no pet -> review
 
 
 def gate1_prompts() -> dict[str, str]:
@@ -124,11 +126,30 @@ def is_wild(category: str, siglip_category: str, wild_scene: bool, det: FrameDet
     return wild_scene and category in g.wild_check_categories + review
 
 
+def head_verdict(frame: FrameVerdict, probs: dict[str, float]) -> FrameVerdict:
+    """The trained head decides instead of the fused score: pet_score = pet + wild share,
+    wild = wild's part of it. Drawings and insects were in its training data, so one bar."""
+    h = settings.gate1.head
+    animal = probs["pet"] + probs["wild"]
+    frame.pet_score = animal * 100
+    frame.threshold = h.pass_from * 100
+    frame.wild = animal > 0 and probs["wild"] / animal >= h.wild_from
+    frame.head = {name: round(p, 3) for name, p in probs.items()}
+    return frame
+
+
+def fail_bar() -> float:
+    """pet_score below this: no pet (MOD_001)."""
+    g = settings.gate1
+    return g.head.fail_below * 100 if g.decider == "head" else g.thresholds.fail_below
+
+
 def score_frames(
     sims: np.ndarray,
     labels: list[str],
     scale: float,
     detections: list[FrameDetections] | None = None,
+    head: list[dict[str, float]] | None = None,
 ) -> list[FrameVerdict]:
     g = settings.gate1
     t = g.thresholds
@@ -179,13 +200,25 @@ def score_frames(
             species=list(det.species) if det is not None else [],
             lookalike=det.lookalike if det is not None else None,
         ))
+        if head is not None and g.decider == "head":
+            head_verdict(frames[-1], head[i])
+        elif head is not None:   # check: the rules decide, the head's view is kept for doubts
+            frames[-1].head = {name: round(p, 3) for name, p in head[i].items()}
     return frames
+
+
+def head_doubts(judged: list[FrameVerdict]) -> bool:
+    """decider: check. The rules passed, but the head is sure most judged frames show no pet
+    (fur coat, figurine, balloon dog): a human looks instead of an automatic approval."""
+    bar = settings.gate1.head.check_no_pet_from
+    doubted = [f for f in judged if f.head is not None and f.head["no_pet"] >= bar]
+    return len(doubted) > len(judged) / 2
 
 
 def outcome_for(score: float, threshold: float) -> Outcome:
     if score >= threshold:
         return "pass"
-    if score >= settings.gate1.thresholds.fail_below:
+    if score >= fail_bar():
         return "borderline"
     return "fail"
 
@@ -196,9 +229,11 @@ def run_gate1(
     scale: float,
     is_video: bool,
     detections: list[FrameDetections] | None = None,
+    head: list[dict[str, float]] | None = None,
 ) -> Gate1Result:
-    """Spec section 2 (images) and 6.1 (videos: pet in >= 30% of sampled frames)."""
-    frames = score_frames(sims, labels, scale, detections)
+    """Spec section 2 (images) and 6.1 (videos: pet in >= 30% of sampled frames).
+    `head`: the trained head's probabilities per frame (gate1.decider: head)."""
+    frames = score_frames(sims, labels, scale, detections, head)
     best = max(frames, key=lambda f: f.pet_score)
 
     if not is_video:
@@ -211,12 +246,17 @@ def run_gate1(
         fraction = len(passed) / len(frames)
         if fraction >= settings.gate1.video_min_pass_fraction:
             outcome = "pass"
-        elif best.pet_score >= settings.gate1.thresholds.fail_below:
+        elif best.pet_score >= fail_bar():
             outcome = "borderline"  # a pet is seen, but in too few frames
         else:
             outcome = "fail"
         judged = passed or frames
         wild = sum(f.wild for f in judged) / len(judged) > 0.5
+
+    doubt = settings.gate1.decider == "check" and outcome == "pass" and head_doubts(
+        [best] if not is_video else judged)
+    if doubt:
+        outcome = "borderline"
 
     species = [] if outcome == "fail" else list(dict.fromkeys(s for f in judged for s in f.species))
     return Gate1Result(
@@ -227,4 +267,5 @@ def run_gate1(
         pass_fraction=round(fraction, 3),
         frames=frames,
         species=species,
+        head_doubt=doubt,
     )

@@ -1,4 +1,4 @@
-
+﻿
 limits:
   image_max_bytes: 52428800
   video_max_bytes: 209715200
@@ -41,7 +41,7 @@ tools:
 metadata:
   ai_generator_keywords:
     - dall-e
-    - "dall·e"
+    - "dallÂ·e"
     - midjourney
     - stable diffusion
     - firefly
@@ -176,10 +176,23 @@ gate1:
   # Bump when the Gate 1 logic changes. model_version = this + model + revision + a
   # fingerprint of every decision-relevant setting, so editing a sentence or a threshold
   # automatically gives a new model_version (and a new cache key).
-  version: gate1-fused-0.6.1   # 0.6.1: 2 of 3 views agreeing on wild -> review; 0.6: wild only when BioCLIP is sure and no pet is seen, else wild scene; sea animals out; 0.5: wild-animal list -> always review; 0.4: look-alike queries, confident-species bar, marine always review
+  version: gate1-fused-0.7   # 0.7: trained head double-checks rules passes (decider check); 0.6.1: 2 of 3 views agreeing on wild -> review; 0.6: wild only when BioCLIP is sure and no pet is seen, else wild scene; sea animals out; 0.5: wild-animal list -> always review; 0.4: look-alike queries, confident-species bar, marine always review
   # true = act on Gate 1 (MOD_001 rejections). false = shadow mode: compute and flag only,
   # decision stays HUMAN_REVIEW. The POC runs live; production can start in shadow mode.
   enforce: true
+  # rules = the fused SigLIP + detector score below; head = the trained pet / wild / no_pet head
+  # (scripts.head_embed -> head_train -> head_eval) decides; check = the rules decide, and a pass
+  # the head is sure shows no pet goes to a human. The detector still runs either way: its boxes
+  # feed species_detected, D4 items and D5 quality.
+  # 2 Nov 2026, hard-case set: rules 6 look-alikes approved / 3 pets rejected; head alone 1 / 5
+  # (cartoons, memes, aquarium glare, pets in hands called wild); check 2 / 3 -> check.
+  decider: check
+  head:
+    file: models/gate1_head.npz
+    pass_from: 0.5      # decider head: pet + wild probability from here: an animal is seen
+    fail_below: 0.2     # decider head: below: MOD_001; in between: borderline -> a human looks
+    wild_from: 0.5      # decider head: wild's part of that from here: wild_context -> review
+    check_no_pet_from: 0.8   # decider check: fur coat 0.99, figurine 1.0, balloon dog 0.99; cartoon dog 0.95 (-> review)
   thresholds:
     pass_photo: 75          # spec 2.2
     pass_illustrated: 60    # spec 2.3: drawings / cartoons

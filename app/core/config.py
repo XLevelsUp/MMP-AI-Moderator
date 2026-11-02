@@ -180,9 +180,27 @@ class Gate1FusionSettings(StrictModel):
         return self
 
 
+class Gate1HeadSettings(StrictModel):
+    file: Path                                   # scripts.head_train output, relative to the project
+    pass_from: float = Field(gt=0, le=1)         # pet + wild share from here: an animal is seen
+    fail_below: float = Field(ge=0, le=1)        # below: MOD_001; in between: borderline (a human looks)
+    wild_from: float = Field(gt=0, le=1)         # wild's part of the animal share from here: wild_context
+    check_no_pet_from: float = Field(gt=0, le=1)  # decider check: a rules pass the head calls no_pet -> review
+
+    @model_validator(mode="after")
+    def bars_in_order(self):
+        if self.fail_below > self.pass_from:
+            raise ValueError("gate1.head.fail_below must not be above pass_from")
+        return self
+
+
 class Gate1Settings(StrictModel):
     version: str
     enforce: bool
+    # rules = fused SigLIP + detector score; head = trained head decides;
+    # check = rules decide, a pass the head is sure shows no pet goes to a human
+    decider: Literal["rules", "head", "check"]
+    head: Gate1HeadSettings
     thresholds: Gate1Thresholds
     video_min_pass_fraction: float = Field(gt=0, le=1)
     score_scale: float = Field(gt=0)

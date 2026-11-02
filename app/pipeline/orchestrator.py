@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -25,8 +25,8 @@ from app.gates.relevance import score_relevance
 from app.gates.scene import SceneResult, scene_suspicion, score_scene
 from app.gates.text import text_hits, text_signals
 from app.ml.registry import (
-    get_ai_model, get_audio_model, get_backbone, get_detector, get_guard_model, get_nsfw_model, get_ocr,
-    get_species_model, get_speech_model,
+    get_ai_model, get_audio_model, get_backbone, get_detector, get_gate1_head, get_guard_model, get_nsfw_model,
+    get_ocr, get_species_model, get_speech_model,
 )
 from app.pipeline.context import ModerationContext
 from app.prepare import prepare_media
@@ -207,6 +207,7 @@ def run_gate1_branches(ctx: ModerationContext, backbone) -> None:
     is_video = ctx.content_type == "video"
     sims = backbone.similarities(ctx.embeddings)
     detections = None
+    indices = list(range(len(ctx.prepared.frames)))
 
     detector = get_detector()
     if detector is not None:
@@ -219,8 +220,30 @@ def run_gate1_branches(ctx: ModerationContext, backbone) -> None:
         ctx.objects_detected = detected_objects(detections)
         sims = sims[indices]  # Gate 1 judges the frames both branches looked at
 
+    head = None
+    if settings.gate1.decider != "rules":
+        with timed(ctx, "gate1_head"):
+            head = head_probabilities(ctx, indices)
+        if head is None:
+            ctx.flags.append("gate1_head_unavailable")  # the rules decide instead
+
     with timed(ctx, "gate1"):
-        ctx.gate1 = run_gate1(sims, backbone.labels, backbone.scale, is_video, detections)
+        ctx.gate1 = run_gate1(sims, backbone.labels, backbone.scale, is_video, detections, head)
+
+
+def head_probabilities(ctx: ModerationContext, indices: list[int]) -> list[dict[str, float]] | None:
+    """The trained head on the frames Gate 1 judges; None if it (or a model it reads) is missing."""
+    model = get_gate1_head()
+    if model is None:
+        return None
+    features = {"siglip": ctx.embeddings[indices]}
+    if "bioclip" in model.features:
+        species_model = get_species_model()
+        if species_model is None:
+            return None
+        pictures = [ctx.prepared.frames[i].detector for i in indices]
+        features["bioclip"] = species_model.embed(pictures).cpu().numpy()
+    return model.probabilities(features)
 
 
 def detected_objects(detections) -> list[DetectedObject]:
@@ -252,6 +275,8 @@ def apply_gate1(ctx: ModerationContext) -> None:
     ctx.species_detected = list(result.species)
     if result.outcome == "borderline":
         ctx.flags.append("gate1_borderline")
+        if result.head_doubt:
+            ctx.flags.append("gate1_head_doubt")  # the rules passed it, the head saw no pet
         return
 
     ctx.flags.append("gate1_passed")
@@ -420,12 +445,13 @@ def log_gate1(ctx: ModerationContext) -> None:
     gate1_logger.info(
         "content_id=%s pet_score=%d outcome=%s bar=%.0f kind=%s siglip=%.0f detector=%s "
         "lookalike=%s species=%s best_animal=%s (%.3f) best_no_pet=%s (%.3f) wild=%s frames=%d "
-        "passed=%.0f%%",
+        "passed=%.0f%% head=%s",
         ctx.content_id, result.pet_score, result.outcome, top.threshold, kind, top.siglip_score,
         detector, top.lookalike or "-", ",".join(result.species) or "-", top.best_animal,
         top.animal_similarity,
         top.best_no_pet, top.no_pet_similarity, result.wild, len(result.frames),
         result.pass_fraction * 100,
+        ",".join(f"{k}:{v:.2f}" for k, v in top.head.items()) if top.head else "off",
     )
 
 

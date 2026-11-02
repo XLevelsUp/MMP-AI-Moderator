@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 from typing import Protocol
 
 from app.core.config import settings
@@ -77,6 +77,10 @@ def load_models() -> None:
         from app.ml.bioclip import BioclipClassifier
 
         registry.register(BioclipClassifier(settings.ml.species_model, species=species))
+    if settings.ml.backbone and settings.gate1.decider != "rules":
+        from app.ml.head import Gate1Head
+
+        registry.register(Gate1Head())
     if settings.ml.nsfw_model:
         from app.ml.classifier import ImageClassifier
 
@@ -122,6 +126,11 @@ def get_detector():
 def get_species_model():
     """The loaded species model (BioCLIP 2), or None."""
     return _ready(settings.ml.species_model)
+
+
+def get_gate1_head():
+    """The loaded trained Gate 1 head, or None (gate1.decider: rules, or it failed to load)."""
+    return _ready("gate1_head" if settings.gate1.decider != "rules" else None)
 
 
 def get_nsfw_model():

@@ -1,7 +1,15 @@
-import hashlib
+﻿import hashlib
 import json
 
-from app.core.config import settings
+from app.core.config import PROJECT_ROOT, settings
+
+
+def head_digest() -> str | None:
+    """Hash of the trained Gate 1 head file when it is used (None with the rules alone)."""
+    if settings.gate1.decider == "rules":
+        return None
+    path = PROJECT_ROOT / settings.gate1.head.file
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else "missing"
 
 
 def decision_settings() -> dict:
@@ -32,6 +40,8 @@ def decision_settings() -> dict:
             "prompts": ml.prompts,
         },
         "gate1": settings.gate1.model_dump(),
+        # the trained head's numbers, not just its path: retraining changes decisions
+        "gate1_head": head_digest(),
         "gate2": settings.gate2.model_dump(),
         # the word lists' contents, not just their paths: editing a list changes decisions
         "word_lists": {

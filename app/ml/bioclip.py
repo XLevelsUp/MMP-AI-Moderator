@@ -50,14 +50,17 @@ class BioclipClassifier:
         self.classify([Image.new("RGB", (64, 64), "gray")])
 
     @torch.inference_mode()
+    def embed(self, pictures: list[Image.Image]) -> torch.Tensor:
+        """One normalised embedding per picture (the Gate 1 head reads whole frames)."""
+        batch = torch.stack([self.preprocess(c.convert("RGB")) for c in pictures]).to(self.device)
+        if settings.ml.dtype == "float16":
+            batch = batch.half()
+        return torch.nn.functional.normalize(self.model.encode_image(batch).float(), dim=-1)
+
     def classify(self, crops: list[Image.Image]) -> list[tuple[str, float]]:
         """Best species and its probability for each crop."""
         if not crops:
             return []
-        batch = torch.stack([self.preprocess(c.convert("RGB")) for c in crops]).to(self.device)
-        if settings.ml.dtype == "float16":
-            batch = batch.half()
-        embeds = torch.nn.functional.normalize(self.model.encode_image(batch).float(), dim=-1)
-        probs = (100 * embeds @ self.text_embeds.T).softmax(dim=-1)
+        probs = (100 * self.embed(crops) @ self.text_embeds.T).softmax(dim=-1)
         best, index = probs.max(dim=1)
         return [(self.species[int(i)], float(p)) for p, i in zip(best, index)]

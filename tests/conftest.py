@@ -22,6 +22,7 @@ def no_real_models(monkeypatch):
     monkeypatch.setattr(settings.ml, "ocr", False)
     monkeypatch.setattr(settings.ml, "audio_model", None)
     monkeypatch.setattr(settings.ml, "speech_model", None)
+    monkeypatch.setattr(settings.gate1, "decider", "rules")   # head tests switch it on themselves
     yield
     registry.clear()
 

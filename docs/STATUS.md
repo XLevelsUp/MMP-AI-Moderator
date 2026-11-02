@@ -14,7 +14,7 @@ yet is the service around it (deployment, review queue, monitoring) — see
 |---|---|---|
 | Validation | format, size, duration, decode, metadata; duplicate cache and perceptual-hash blocklist in Redis | — |
 | Prepare | resize; videos sampled at 1 frame per second (0.5 s under 10 s), GPU decoding when available | — |
-| Gate 1 | pet score from SigLIP + the OWLv2 animal detector + BioCLIP species; no pet = answer at once (MOD_001); wild / marine animals go to review when 2 of 3 views agree | SigLIP 2, OWLv2, BioCLIP 2 |
+| Gate 1 | pet score from SigLIP + the OWLv2 animal detector + BioCLIP species; no pet = answer at once (MOD_001); wild / marine animals go to review when 2 of 3 views agree. A trained head (pet / wild / no_pet, logistic regression on the SigLIP + BioCLIP embeddings) double-checks every pass: if it is ≥ 0.8 sure there is no pet, a human looks (`gate1.decider: check`) | SigLIP 2, OWLv2, BioCLIP 2, Gate 1 head |
 | Gate 2 | D1 welfare, D2 adult, D3 violence, D4 items, D5 quality, D6 relevance; composite score and decision rules | all below |
 | — safety questions | 11 fixed yes / no questions about each picture (full frame + a crop around the pet); a strong "yes" fires the spec signal, a medium score sends the post to a human | Shieldstral 1.0 |
 | — scenes and contexts | harm / safe sentences, and the spec 7 contexts that soften deductions (medical, raw feeding, rescue, memorial) | SigLIP 2 |
@@ -81,8 +81,13 @@ real harmful examples set it from the spec's recall targets.
 - **Split-second snaps** without visible injury are missed by every model tried.
 - **Hard rejects from Shieldstral at 0.5 are not calibrated:** a pet monkey photo scored
   "hurt" 0.49. Per the 28 Oct decision every rejection still goes to a human.
-- **Gate 1 look-alikes:** 6 no-pet look-alikes (fur coat, closed carrier, figurine, balloon
-  dog...) are still approved by Gate 1; the trained Gate 1 head (dataset in progress) is the fix.
+- **Gate 1 look-alikes:** the rules approved 6 no-pet look-alikes on the hard-case set; with the
+  trained head checking (2 Nov 2026) it is 2 (an empty planted aquarium, a closed carrier),
+  approval precision 90.6% → 96.4%, no extra pets rejected, 4 more pets to review (two cartoons,
+  a meme, a can label). The head alone is not ready to decide: it calls aquarium fish with glare,
+  a hamster in hands and a blurred running dog "wild", and rejects cartoons and memes — its
+  dataset (`D:\dataset`, 1,698 web photos) lacks those. Round 2: add them, or better, real app
+  photos from the review queue; rerun `scripts.head_embed` → `head_train` → `head_eval`.
 
 The fix for the first three is a fine-tune of Shieldstral on moderator labels from the review queue.
 
@@ -111,4 +116,4 @@ Switches: `GUARD_MODEL` (Shieldstral on / off), `ML_DEVICE`, `ML_DTYPE`, `FFMPEG
 | Speed test on an L4, video tuning to < 15 s | spec target |
 | Catch-rate test on trust-and-safety examples, then `act_from` thresholds | spec recall targets |
 | Shadow mode, then live | prove agreement with moderators before auto-approval |
-| Trained Gate 1 head; Shieldstral fine-tune | the known limitations above |
+| Gate 1 head round 2 (cartoons, memes, aquarium fish, pets in hands) so it can decide alone; Shieldstral fine-tune | the known limitations above |
