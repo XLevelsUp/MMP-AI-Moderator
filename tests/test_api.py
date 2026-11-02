@@ -39,24 +39,24 @@ def test_health(client):
 
 
 def test_missing_user_id_is_422(client):
-    r = client.post("/api/v1/moderate", files=FILE, data={"content_type": "image"})
+    r = client.post("/api/v1/moderate/upload", files=FILE, data={"content_type": "image"})
     assert r.status_code == 422
 
 
 def test_invalid_content_type_is_422(client):
-    r = client.post("/api/v1/moderate", files=FILE,
+    r = client.post("/api/v1/moderate/upload", files=FILE,
                     data={"content_type": "audio", "user_id": VALID_USER})
     assert r.status_code == 422
 
 
 def test_invalid_uuid_is_422(client):
-    r = client.post("/api/v1/moderate", files=FILE,
+    r = client.post("/api/v1/moderate/upload", files=FILE,
                     data={"content_type": "image", "user_id": "not-a-uuid"})
     assert r.status_code == 422
 
 
 def test_valid_request_shape(client):
-    r = client.post("/api/v1/moderate", files=FILE,
+    r = client.post("/api/v1/moderate/upload", files=FILE,
                     data={"content_type": "image", "user_id": VALID_USER})
     assert r.status_code == 200
     body = r.json()
@@ -69,7 +69,7 @@ def test_valid_request_shape(client):
 
 def test_too_large_image_rejected(client, temp_dir):
     big = b"\0" * (settings.limits.image_max_bytes + 1)  # just over 20 MiB
-    r = client.post("/api/v1/moderate",
+    r = client.post("/api/v1/moderate/upload",
                     files={"file": ("big.jpg", big, "image/jpeg")},
                     data={"content_type": "image", "user_id": VALID_USER})
 
@@ -83,7 +83,7 @@ def test_too_large_image_rejected(client, temp_dir):
 
 
 def test_empty_file_rejected(client, temp_dir):
-    r = client.post("/api/v1/moderate",
+    r = client.post("/api/v1/moderate/upload",
                     files={"file": ("empty.jpg", b"", "image/jpeg")},
                     data={"content_type": "image", "user_id": VALID_USER})
 
@@ -92,13 +92,13 @@ def test_empty_file_rejected(client, temp_dir):
 
 
 def test_temp_dir_empty_after_success(client, temp_dir):
-    client.post("/api/v1/moderate", files=FILE,
+    client.post("/api/v1/moderate/upload", files=FILE,
                 data={"content_type": "image", "user_id": VALID_USER})
 
     assert list(temp_dir.iterdir()) == []
 
 def post_image(client, user_id=VALID_USER):
-    return client.post("/api/v1/moderate", files=FILE,
+    return client.post("/api/v1/moderate/upload", files=FILE,
                        data={"content_type": "image", "user_id": user_id})
 
 
@@ -143,7 +143,7 @@ def test_locked_upload_returns_409(client, sync_redis, temp_dir, monkeypatch):
 
 def test_too_large_rejection_is_not_cached(client, sync_redis):
     big = b"\0" * (settings.limits.image_max_bytes + 1)
-    client.post("/api/v1/moderate",
+    client.post("/api/v1/moderate/upload",
                 files={"file": ("big.jpg", big, "image/jpeg")},
                 data={"content_type": "image", "user_id": VALID_USER})
 
@@ -172,7 +172,7 @@ def make_jpeg(size=(64, 64)) -> bytes:
 
 def test_exe_renamed_to_jpg_rejected(client, temp_dir):
     exe = b"MZ\x90\x00" + b"\x00" * 60
-    r = client.post("/api/v1/moderate",
+    r = client.post("/api/v1/moderate/upload",
                     files={"file": ("fake.jpg", exe, "image/jpeg")},
                     data={"content_type": "image", "user_id": VALID_USER})
 
@@ -185,7 +185,7 @@ def test_exe_renamed_to_jpg_rejected(client, temp_dir):
 
 def test_mp4_sent_as_image_is_type_mismatch(client):
     mp4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 40
-    r = client.post("/api/v1/moderate",
+    r = client.post("/api/v1/moderate/upload",
                     files={"file": ("clip.jpg", mp4, "image/jpeg")},
                     data={"content_type": "image", "user_id": VALID_USER})
 
@@ -193,7 +193,7 @@ def test_mp4_sent_as_image_is_type_mismatch(client):
 
 
 def test_jpeg_sent_as_video_is_type_mismatch(client):
-    r = client.post("/api/v1/moderate", files=FILE,
+    r = client.post("/api/v1/moderate/upload", files=FILE,
                     data={"content_type": "video", "user_id": VALID_USER})
 
     assert r.json()["flags"] == ["type_mismatch"]
@@ -201,17 +201,17 @@ def test_jpeg_sent_as_video_is_type_mismatch(client):
 
 def test_format_rejection_is_cached(client, sync_redis):
     exe = b"MZ\x90\x00" + b"\x00" * 60
-    first = client.post("/api/v1/moderate",
+    first = client.post("/api/v1/moderate/upload",
                         files={"file": ("fake.jpg", exe, "image/jpeg")},
                         data={"content_type": "image", "user_id": VALID_USER}).json()
-    second = client.post("/api/v1/moderate",
+    second = client.post("/api/v1/moderate/upload",
                          files={"file": ("fake.jpg", exe, "image/jpeg")},
                          data={"content_type": "image", "user_id": VALID_USER}).json()
 
     assert second == first  # a format rejection is a final decision, so it is stored
 
 def test_same_file_as_video_then_image_is_not_a_duplicate(client):
-    as_video = client.post("/api/v1/moderate", files=FILE,
+    as_video = client.post("/api/v1/moderate/upload", files=FILE,
                            data={"content_type": "video", "user_id": VALID_USER}).json()
     as_image = post_image(client).json()
 
@@ -222,14 +222,14 @@ def test_same_file_as_video_then_image_is_not_a_duplicate(client):
 
 def test_same_file_other_context_is_not_a_duplicate(client):
     as_post = post_image(client).json()
-    as_breeding = client.post("/api/v1/moderate", files=FILE,
+    as_breeding = client.post("/api/v1/moderate/upload", files=FILE,
                               data={"content_type": "image", "user_id": VALID_USER,
                                     "context": "breeding"}).json()
 
     assert as_breeding["content_id"] != as_post["content_id"]
 
 def post_bytes(client, data: bytes, name: str = "img.jpg"):
-    return client.post("/api/v1/moderate",
+    return client.post("/api/v1/moderate/upload",
                        files={"file": (name, data, "image/jpeg")},
                        data={"content_type": "image", "user_id": VALID_USER})
 
@@ -254,7 +254,7 @@ def test_huge_png_is_too_large_pixels(client):
 
     assert body["flags"] == ["image_too_large_pixels"]
 def post_video(client, path):
-    return client.post("/api/v1/moderate",
+    return client.post("/api/v1/moderate/upload",
                        files={"file": (path.name, path.read_bytes(), "video/mp4")},
                        data={"content_type": "video", "user_id": VALID_USER})
 

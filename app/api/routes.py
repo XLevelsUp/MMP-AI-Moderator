@@ -1,15 +1,19 @@
-from time import perf_counter
+from time import perf_counter, time
 from typing import Annotated
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 
-from app.api.schemas import ContentContext, ContentType, ModerationResponse
+from app.api.schemas import ContentContext, ContentType, ModerationRequest, ModerationResponse, QueuedResponse
 from app.cache.idempotency import IdempotencyStore, UploadKey, get_idempotency_store
+from app.core.config import settings
 from app.core.logging import log_problem, log_result
 from app.core.versioning import current_model_version
+from app.jobs.queue import Job, JobQueue, QueueFull
 from app.pipeline.context import ModerationContext
 from app.pipeline.orchestrator import finish, run_pipeline
 from app.validation.csam import CsamCheckError
@@ -20,17 +24,88 @@ from app.validation.intake import remove_temp_file, save_upload
 router = APIRouter()
 
 
+def get_job_queue(store: Annotated[IdempotencyStore, Depends(get_idempotency_store)]) -> JobQueue:
+    return JobQueue(store.redis)
+
+
+def queued(content_id: UUID) -> JSONResponse:
+    return JSONResponse(status_code=202, content=QueuedResponse(content_id=content_id).model_dump(mode="json"))
+
+
+def allowed_link(url: str) -> bool:
+    """Only the app's own storage: the service must never fetch an address a caller picks."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return False
+    media = settings.media
+    scheme_ok = parts.scheme == "https" or (not media.require_https and parts.scheme == "http")
+    return scheme_ok and host is not None and host.lower() in media.allowed_hosts
+
+
 @router.post(
     "/api/v1/moderate",
+    status_code=202,
+    response_model=QueuedResponse,
+)
+async def moderate_content(request: ModerationRequest, queue: Annotated[JobQueue, Depends(get_job_queue)]):
+    """Accept the upload and answer at once. A worker checks it and updates the database."""
+    if not allowed_link(request.media_url):
+        raise HTTPException(status_code=422, detail="media_url must be an HTTPS link to the app's storage.")
+    content_id = uuid4()
+    job = Job(
+        str(content_id), str(request.account_id), str(request.pet_id or ""), request.entity_type,
+        str(request.entity_id), request.media_url, request.content_type, request.context,
+        current_model_version(), time(), str(request.declared_breed_id or ""),
+        "" if request.declared_is_cross_breed is None else str(request.declared_is_cross_breed).lower(),
+    )
+    try:
+        await queue.enqueue(job)
+    except QueueFull:
+        log_problem(503, content_id, f"{request.content_type} queue is full")
+        raise HTTPException(
+            status_code=503,
+            detail="Too many uploads are waiting. Try again shortly.",
+            headers={"Retry-After": str(settings.queue.retry_after_seconds)},
+        )
+    except RedisError as exc:
+        log_problem(503, content_id, f"redis unavailable: {exc}")
+        raise HTTPException(status_code=503, detail="Queue unavailable. Try again shortly.")
+    return QueuedResponse(content_id=content_id)
+
+
+@router.get(
+    "/api/v1/moderate/{content_id}",
+    response_model=ModerationResponse,
+    responses={202: {"model": QueuedResponse}},
+)
+async def moderation_result(content_id: UUID, queue: Annotated[JobQueue, Depends(get_job_queue)]):
+    """For debugging and support: the database holds the real result. Kept for queue.result_ttl_seconds."""
+    try:
+        state = await queue.state(content_id)
+    except RedisError as exc:
+        log_problem(503, content_id, f"redis unavailable: {exc}")
+        raise HTTPException(status_code=503, detail="Result store unavailable. Try again shortly.")
+    if state is None:
+        raise HTTPException(status_code=404, detail="Unknown content_id.")
+    return state.response if state.status == "done" else queued(content_id)
+
+
+@router.post(
+    "/api/v1/moderate/upload",
     response_model=ModerationResponse,
 )
-async def moderate_content(
+async def moderate_upload(
     file: Annotated[UploadFile, File()],
     content_type: Annotated[ContentType, Form()],
     user_id: Annotated[UUID, Form()],
     store: Annotated[IdempotencyStore, Depends(get_idempotency_store)],
     context: Annotated[ContentContext, Form()] = "post",
 ) -> ModerationResponse:
+    """Test page and quick local runs only (QUEUE_ENABLED=false): answers in this request, writes nothing."""
+    if settings.queue.enabled:
+        raise HTTPException(status_code=404, detail="Not available while the queue is on.")
     ctx = ModerationContext(
         content_id=uuid4(),
         user_id=user_id,

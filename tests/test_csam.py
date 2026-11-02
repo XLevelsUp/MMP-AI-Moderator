@@ -164,7 +164,7 @@ def test_failed_check_answers_503_and_is_not_cached(client, monkeypatch):
 
     monkeypatch.setattr(orchestrator, "get_csam_checker", lambda: Broken())
     data = make_jpeg()
-    post = lambda: client.post("/api/v1/moderate", files={"file": ("x.jpg", data, "image/jpeg")},  # noqa: E731
+    post = lambda: client.post("/api/v1/moderate/upload", files={"file": ("x.jpg", data, "image/jpeg")},  # noqa: E731
                                data={"content_type": "image", "user_id": str(uuid4())})
 
     assert post().status_code == 503

@@ -20,7 +20,7 @@ def fx() -> dict[str, Path]:
 
 def post(client, path: Path, content_type: str, user_id: str = VALID_USER):
     return client.post(
-        "/api/v1/moderate",
+        "/api/v1/moderate/upload",
         files={"file": (path.name, path.read_bytes())},
         data={"content_type": content_type, "user_id": user_id},
     )
@@ -98,7 +98,7 @@ def test_iphone_heic_passes(client):
 
 def test_missing_user_id_is_422(client, fx):
     r = client.post(
-        "/api/v1/moderate",
+        "/api/v1/moderate/upload",
         files={"file": ("ok.jpg", fx["ok.jpg"].read_bytes())},
         data={"content_type": "image"},
     )

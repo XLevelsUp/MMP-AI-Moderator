@@ -4,12 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from app.core.config import settings
 from app.prepare.images import frame_from, to_rgb
 from app.prepare.media import PreparedMedia
 from app.validation.errors import ValidationFailure
+from app.validation.image_check import frame_seconds
 from app.validation.video_check import run_tool
 
 
@@ -98,6 +99,25 @@ def decode(path: Path, duration: float, times: list[float], gpu_size: tuple[int,
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:  # threads only wait on ffmpeg
         parts = list(pool.map(lambda job: decode_piece(path, job[0], job[1], job[2], gpu_size), jobs))
     return [frame for part in parts for frame in part]
+
+
+def prepare_animated(path: Path, duration: float) -> PreparedMedia:
+    """GIF, animated WebP / PNG: frames at the same times as a video's. Pillow reads them, because
+    ffmpeg can't decode animated WebP."""
+    wanted = sample_timestamps(duration)
+    prepared = []
+    with Image.open(path) as img:
+        elapsed = 0.0
+        for i in range(img.n_frames):
+            img.seek(i)
+            img.load()
+            shows = frame_seconds(img)
+            if wanted and wanted[0] < elapsed + shows:  # this frame is on screen at the wanted time
+                prepared.append(frame_from(to_rgb(ImageOps.exif_transpose(img)), round(elapsed, 3)))
+                while wanted and wanted[0] < elapsed + shows:
+                    wanted.pop(0)
+            elapsed += shows
+    return PreparedMedia(frames=prepared)
 
 
 def prepare_video(path: Path, duration: float, width: int = 0, height: int = 0) -> PreparedMedia:

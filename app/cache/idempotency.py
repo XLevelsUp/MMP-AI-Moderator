@@ -17,11 +17,11 @@ class UploadKey:
     content_type: str
     context: str
     model_version: str  # new models or rules must not reuse answers made by older ones
+    entity_id: str = ""  # the same file in another post gets its own check and its own row updated
 
     def suffix(self) -> str:
-        return (
-            f"{self.sha256}:{self.user_id}:{self.content_type}:{self.context}:{self.model_version}"
-        )
+        base = f"{self.sha256}:{self.user_id}:{self.content_type}:{self.context}:{self.model_version}"
+        return f"{base}:{self.entity_id}" if self.entity_id else base
 
 
 def result_key(key: UploadKey) -> str:

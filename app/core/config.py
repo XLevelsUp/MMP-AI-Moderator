@@ -30,6 +30,7 @@ class LimitsSettings(StrictModel):
     duration_tolerance_seconds: float
     min_image_side_pixels: int
     image_max_pixels: int
+    animated_max_total_pixels: int
 
 
 class FormatsSettings(StrictModel):
@@ -55,6 +56,36 @@ class RedisSettings(StrictModel):
 
 class IntakeSettings(StrictModel):
     chunk_size_bytes: int
+
+
+class DatabaseSettings(StrictModel):
+    url: str | None
+    connect_timeout_seconds: int = Field(ge=1)
+
+
+class MediaSettings(StrictModel):
+    allowed_hosts: list[str]
+    require_https: bool
+    connect_timeout_seconds: float = Field(gt=0)
+    download_timeout_seconds: float = Field(gt=0)
+
+
+class QueueSettings(StrictModel):
+    enabled: bool
+    image_stream: str
+    video_stream: str
+    group: str
+    poll_seconds: float = Field(gt=0)
+    image_max_waiting: int = Field(ge=1)
+    video_max_waiting: int = Field(ge=1)
+    retry_after_seconds: int = Field(ge=1)
+    result_ttl_seconds: int = Field(ge=1)
+    reclaim_idle_seconds: int = Field(ge=1)
+    reclaim_every_seconds: int = Field(ge=1)
+    reclaim_batch: int = Field(ge=1)
+    max_attempts: int = Field(ge=1)
+    images_per_video: int = Field(ge=1)
+    redis_retry_seconds: float = Field(gt=0)
 
 
 class ToolsSettings(StrictModel):
@@ -490,6 +521,9 @@ class AppSettings(StrictModel):
     redis: RedisSettings
     model_version: str
     intake: IntakeSettings
+    queue: QueueSettings
+    database: DatabaseSettings
+    media: MediaSettings
     tools: ToolsSettings
     metadata: MetadataSettings
     logging: LoggingSettings
@@ -530,6 +564,13 @@ def load_settings(path: Path = CONFIG_FILE) -> AppSettings:
 
     # Environment variables can override the Redis URL.
     data["redis"]["url"] = os.getenv("REDIS_URL", data["redis"]["url"])
+    # Secrets and per-deployment values stay out of this file.
+    data["database"]["url"] = os.getenv("DATABASE_URL", data["database"]["url"])
+    hosts = os.getenv("MEDIA_ALLOWED_HOSTS")
+    if hosts is not None:
+        data["media"]["allowed_hosts"] = [host.strip().lower() for host in hosts.split(",") if host.strip()]
+    # QUEUE_ENABLED=false: the API answers inside its own process, no worker needed (quick local runs).
+    data["queue"]["enabled"] = os.getenv("QUEUE_ENABLED", str(data["queue"]["enabled"])).lower() == "true"
     # The cloud GPU run (Step 16b) switches device and precision without editing this file.
     data["ml"]["device"] = os.getenv("ML_DEVICE", data["ml"]["device"])
     data["ml"]["dtype"] = os.getenv("ML_DTYPE", data["ml"]["dtype"])

@@ -34,7 +34,7 @@ def frame_from(img: Image.Image, timestamp: float | None = None) -> PreparedFram
 
 
 def prepare_image(path: Path) -> PreparedMedia:
-    """Upright RGB copies at model sizes. Animated images: first frame (decision D-11)."""
+    """Upright RGB copies at model sizes (animated images go through prepare_animated)."""
     size = settings.prepare.detector_size
     with Image.open(path) as img:
         img.draft("RGB", (size, size))  # JPEG decodes at a reduced scale: fast, low memory

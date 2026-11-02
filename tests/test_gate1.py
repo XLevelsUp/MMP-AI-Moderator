@@ -280,7 +280,7 @@ def test_approved_answer_is_cached_like_any_decision(client, monkeypatch):
     monkeypatch.setattr(orchestrator, "get_backbone", lambda: FakeBackbone(DOG))
 
     def post():
-        return client.post("/api/v1/moderate", files=FILE,
+        return client.post("/api/v1/moderate/upload", files=FILE,
                            data={"content_type": "image", "user_id": VALID_USER}).json()
 
     first = post()

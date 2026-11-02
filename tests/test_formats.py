@@ -28,6 +28,14 @@ AVI = pad(b"RIFF\x00\x00\x00\x00AVI ")
     (ftyp(b"heix"), "heic"),
     (ftyp(b"mif1"), "heic"),
     (ftyp(b"msf1"), "heic"),
+    (ftyp(b"heif"), "heif"),
+    (ftyp(b"hevc"), "heif"),
+    (pad(b"GIF87a"), "gif"),
+    (pad(b"GIF89a"), "gif"),
+    (pad(b"\x1a\x45\xdf\xa3\x01\x00\x00\x00\x00\x00\x00\x1f\x42\x82\x84webm"), "webm"),
+    (pad(b"\x00\x00\x01\xba"), "mpeg"),
+    (pad(b"\x00\x00\x01\xb3"), "mpeg"),
+    (ftyp(b"iso5"), "mp4"),
     (ftyp(b"isom"), "mp4"),
     (ftyp(b"iso2"), "mp4"),
     (ftyp(b"mp41"), "mp4"),
@@ -42,7 +50,7 @@ def test_detects_known_formats(header, expected):
 
 @pytest.mark.parametrize("header", [
     pad(b"MZ\x90\x00"),               # Windows .exe
-    pad(b"GIF89a"),                   # GIF is not allowed
+    pad(b"\x1a\x45\xdf\xa3\x01\x00\x00\x00\x00\x00\x00\x1f\x42\x82\x88matroska"),  # MKV is not in the list
     pad(b"%PDF-1.7"),                 # PDF
     pad(b"RIFF\x00\x00\x00\x00WAVE"), # WAV audio
     ftyp(b"avif"),                    # AVIF is not in the list

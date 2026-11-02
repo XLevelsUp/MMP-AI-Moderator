@@ -23,6 +23,7 @@ def no_real_models(monkeypatch):
     monkeypatch.setattr(settings.ml, "audio_model", None)
     monkeypatch.setattr(settings.ml, "speech_model", None)
     monkeypatch.setattr(settings.gate1, "decider", "rules")   # head tests switch it on themselves
+    monkeypatch.setattr(settings.queue, "enabled", False)     # queue tests switch it on themselves
     yield
     registry.clear()
 
@@ -93,6 +94,9 @@ def videos(tmp_path_factory):
         "mp4": _ffmpeg(folder / "ok.mp4", *_video_src(2), *H264),
         "mov": _ffmpeg(folder / "ok.mov", *_video_src(2), *H264),
         "avi": _ffmpeg(folder / "ok.avi", *_video_src(2), "-c:v", "mpeg4"),
+        "webm": _ffmpeg(folder / "ok.webm", *_video_src(2), "-pix_fmt", "yuv420p", "-c:v", "libvpx", "-b:v", "200k"),
+        "mpeg": _ffmpeg(folder / "ok.mpg", *_video_src(2), "-c:v", "mpeg2video"),
+        "mkv": _ffmpeg(folder / "ok.mkv", *_video_src(2), *H264),
         "with_audio": _ffmpeg(
             folder / "with_audio.mp4",
             *_video_src(2), *_audio_src(2), *H264, "-c:a", "aac", "-shortest",

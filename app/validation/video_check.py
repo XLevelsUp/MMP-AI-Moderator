@@ -10,7 +10,7 @@ from app.validation.errors import ProcessingTimeout, ValidationFailure
 
 # ffprobe's format_name for each container we accept. mp4 and mov share one
 # demuxer ("mov,mp4,m4a,3gp,3g2,mj2"), so both names appear for either file.
-CONTAINER_NAMES = {"mp4": "mp4", "mov": "mov", "avi": "avi"}
+CONTAINER_NAMES = {"mp4": {"mp4"}, "mov": {"mov"}, "avi": {"avi"}, "webm": {"webm"}, "mpeg": {"mpeg", "mpegvideo"}}
 
 
 @dataclass
@@ -72,6 +72,30 @@ def parse_duration(info: dict, video_stream: dict) -> float | None:
     return None
 
 
+def measured_duration(path: Path) -> float | None:
+    """Time of the last video packet, for files whose header has no duration (WebM recorded by a browser)."""
+    result = run_tool(
+        [
+            settings.tools.ffprobe,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "packet=pts_time",
+            "-of", "csv=p=0",
+            str(path),
+        ],
+        settings.timeouts.ffprobe_seconds,
+    )
+    if result.returncode != 0:
+        return None
+    times = []
+    for line in result.stdout.decode(errors="ignore").split():
+        try:
+            times.append(float(line.strip(",")))
+        except ValueError:
+            continue
+    return max(times) if times else None
+
+
 def decode_first_frame(path: Path) -> bytes:
     """Really decode one frame; a file that cannot do this is corrupt."""
     result = run_tool(
@@ -97,7 +121,7 @@ def check_video(path: Path, file_format: str) -> VideoInfo:
     info = probe(path)
 
     format_names = info.get("format", {}).get("format_name", "").split(",")
-    if CONTAINER_NAMES.get(file_format) not in format_names:
+    if CONTAINER_NAMES.get(file_format, set()).isdisjoint(format_names):
         raise ValidationFailure("type_mismatch")
 
     streams = info.get("streams", [])
@@ -114,6 +138,8 @@ def check_video(path: Path, file_format: str) -> VideoInfo:
     video = video_streams[0]
 
     duration = parse_duration(info, video)
+    if duration is None:
+        duration = measured_duration(path)
     if duration is None:
         raise ValidationFailure("corrupt_file")
 

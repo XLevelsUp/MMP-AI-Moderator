@@ -6,6 +6,7 @@ limits:
   duration_tolerance_seconds: 0.5
   min_image_side_pixels: 32
   image_max_pixels: 210000000   # 108 / 200 MP phone photos must pass (decided); still stops pixel bombs
+  animated_max_total_pixels: 2000000000   # GIF / animated WebP: width x height x frames (about 1,000 frames at 1080p)
 
 
 allowed_formats:
@@ -14,10 +15,14 @@ allowed_formats:
     - png
     - webp
     - heic
+    - heif
+    - gif
   video:
     - mp4
     - mov
     - avi
+    - webm
+    - mpeg
 
 timeouts:
   ffprobe_seconds: 10
@@ -33,6 +38,36 @@ model_version: validation-0.1
 
 intake:
   chunk_size_bytes: 1048576
+
+# Where the worker writes results (moderation.decisions + moderation_status). DATABASE_URL in .env.
+database:
+  url: null
+  connect_timeout_seconds: 5
+
+# The API accepts only links to the app's own storage. MEDIA_ALLOWED_HOSTS in .env, comma-separated.
+media:
+  allowed_hosts: []
+  require_https: true
+  connect_timeout_seconds: 5
+  download_timeout_seconds: 60
+
+# Uploads wait here for a GPU worker (python -m app.worker).
+queue:
+  enabled: true                # false (or QUEUE_ENABLED=false) = only POST /api/v1/moderate/upload works, inside the API, no worker
+  image_stream: mod:jobs:image
+  video_stream: mod:jobs:video
+  group: moderation-workers
+  poll_seconds: 0.1
+  image_max_waiting: 2000      # above this the API answers 503 instead of an ever longer wait
+  video_max_waiting: 200
+  retry_after_seconds: 30      # the Retry-After header on that 503
+  result_ttl_seconds: 86400    # GET /api/v1/moderate/{content_id} works for this long
+  reclaim_idle_seconds: 300    # a job untouched this long: its worker died, another takes it over
+  reclaim_every_seconds: 30
+  reclaim_batch: 10
+  max_attempts: 3              # tried this many times without a result: a moderator looks at it
+  images_per_video: 8          # photos go first, but a video waits for at most this many photos
+  redis_retry_seconds: 2
 
 tools:
   ffprobe: ffprobe
@@ -62,7 +97,7 @@ logging:
 redis:
   url: redis://127.0.0.1:6379/0
   cache_ttl_seconds: 2592000
-  lock_ttl_seconds: 60
+  lock_ttl_seconds: 900   # the lock lasts while the job waits in the queue; the worker releases it
   lock_wait_seconds: 5
   lock_poll_seconds: 0.2
   connect_timeout_seconds: 2

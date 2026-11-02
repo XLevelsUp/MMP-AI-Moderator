@@ -108,7 +108,7 @@ st.set_page_config(page_title="MMP Moderation Tester", layout="wide")
 st.title("MeetMyPets moderation tester")
 
 with st.sidebar:
-    api_url = st.text_input("API URL", "http://localhost:8000/api/v1/moderate")
+    api_url = st.text_input("API URL", "http://localhost:8000/api/v1/moderate/upload")
     # A 60 s video on the laptop CPU takes several minutes; on a GPU it is seconds.
     request_timeout = st.number_input("Request timeout (s)", min_value=10, max_value=3600, value=900, step=60)
     user_id = st.text_input("user_id", "3f2b8c1e-0000-4000-8000-000000000001")

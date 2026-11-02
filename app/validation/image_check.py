@@ -28,6 +28,13 @@ class ImageInfo:
     animated: bool
     frame_count: int
     orientation: int    # EXIF orientation 1-8 (1 = normal)
+    duration_seconds: float = 0.0   # animated only: one play through
+
+
+def frame_seconds(img: Image.Image) -> float:
+    """How long the current frame shows. Like browsers, a delay of 10 ms or less plays as 100 ms."""
+    ms = img.info.get("duration", 0) or 0
+    return (ms if ms > 10 else 100) / 1000
 
 
 def check_image(path: Path) -> ImageInfo:
@@ -50,6 +57,16 @@ def check_image(path: Path) -> ImageInfo:
             animated = bool(getattr(img, "is_animated", False))
             frame_count = int(getattr(img, "n_frames", 1))
             orientation = int(img.getexif().get(EXIF_ORIENTATION, 1))
+            duration = 0.0
+            if animated:
+                # Every frame gets checked like a video's, so all of them must decode. Bounded first:
+                # a small file can hold a huge number of frames.
+                if width * height * frame_count > settings.limits.animated_max_total_pixels:
+                    raise ValidationFailure("image_too_large_pixels")
+                for i in range(frame_count):
+                    img.seek(i)
+                    img.load()
+                    duration += frame_seconds(img)
 
     except ValidationFailure:
         raise
@@ -66,6 +83,10 @@ def check_image(path: Path) -> ImageInfo:
     if width < min_side or height < min_side:
         raise ValidationFailure("image_too_small")
 
+    limits = settings.limits
+    if duration > limits.max_video_duration_seconds + limits.duration_tolerance_seconds:
+        raise ValidationFailure("duration_exceeded")
+
     return ImageInfo(
         width=width,
         height=height,
@@ -73,4 +94,5 @@ def check_image(path: Path) -> ImageInfo:
         animated=animated,
         frame_count=frame_count,
         orientation=orientation,
+        duration_seconds=round(duration, 3),
     )

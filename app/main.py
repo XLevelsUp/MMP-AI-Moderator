@@ -25,7 +25,8 @@ tempfile.tempdir = str(settings.temp_dir)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await run_in_threadpool(load_models)  # once, before the first request
+    if not settings.queue.enabled:  # with the queue, the GPU workers hold the models
+        await run_in_threadpool(load_models)  # once, before the first request
     yield
 
 app = FastAPI(title="MeetMyPets Moderation POC", lifespan=lifespan)

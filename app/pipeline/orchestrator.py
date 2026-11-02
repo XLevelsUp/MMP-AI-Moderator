@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,6 +52,12 @@ def timed(ctx: ModerationContext, stage: str):
         yield
     finally:
         ctx.timings[stage] = round((perf_counter() - start) * 1000)
+
+
+def judged_as_video(ctx: ModerationContext) -> bool:
+    """Several moments to check: a video, or an animated image such as a GIF."""
+    image = ctx.validation.image
+    return ctx.content_type == "video" or (image is not None and image.animated)
 
 
 def run_checks(path: Path, content_type: str) -> ValidationResult:
@@ -179,7 +185,7 @@ def spread_frames(ctx: ModerationContext, wanted: int) -> list[int]:
 def ai_label_pictures(ctx: ModerationContext) -> list:
     """The original image (the model wants native resolution), or a few detector frames
     of a video spread from start to end."""
-    if ctx.content_type == "image":
+    if not judged_as_video(ctx):
         with Image.open(ctx.path) as img:
             img.load()
             return [img]
@@ -204,7 +210,7 @@ def run_ai_label(ctx: ModerationContext) -> None:
 
 def run_gate1_branches(ctx: ModerationContext, backbone) -> None:
     """SigLIP on every frame; detector + species model on the frames they can afford."""
-    is_video = ctx.content_type == "video"
+    is_video = judged_as_video(ctx)
     sims = backbone.similarities(ctx.embeddings)
     detections = None
     indices = list(range(len(ctx.prepared.frames)))
@@ -308,7 +314,7 @@ def run_gate2(ctx: ModerationContext, backbone) -> None:
 
     guard = get_guard_model()
     if guard is not None:
-        is_video = ctx.content_type == "video"
+        is_video = judged_as_video(ctx)
         suspicion = None
         if is_video:  # SigLIP already read every frame: its harm sentences point at the moments to check
             sims = backbone.similarities(ctx.embeddings)

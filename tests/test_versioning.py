@@ -50,7 +50,7 @@ def test_runtime_settings_do_not_change_the_fingerprint(monkeypatch):
 
 def post(client, data: bytes):
     return client.post(
-        "/api/v1/moderate",
+        "/api/v1/moderate/upload",
         files={"file": ("x.jpg", data, "image/jpeg")},
         data={"content_type": "image", "user_id": VALID_USER},
     ).json()

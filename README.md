@@ -18,6 +18,8 @@ results, known limitations and what is still missing: [docs/STATUS.md](docs/STAT
 |---|---|
 | Start Redis | `docker compose up -d` |
 | Run the API | `uv run uvicorn app.main:app --reload` |
+| Run a GPU worker (one per GPU, in a second terminal) | `uv run python -m app.worker` |
+| Run the API alone, no worker (for the test page) | `$env:QUEUE_ENABLED="false"; uv run uvicorn app.main:app --reload` |
 | Test page | `uvx --with httpx --with pandas --with pillow-heif streamlit run scripts/review_ui.py` |
 | Make test files | `uv run python -m scripts.make_fixtures` |
 | Run tests | `uv run pytest` |
@@ -25,7 +27,12 @@ results, known limitations and what is still missing: [docs/STATUS.md](docs/STAT
 | Blocklist | `uv run python -m scripts.blocklist add\|check\|remove\|count ...` |
 
 The test page runs through `uvx` in its own environment because Streamlit requires
-`pillow<13`, while the service uses Pillow 13.
+`pillow<13`, while the service uses Pillow 13. It expects an answer in the same request, so run
+the API with `QUEUE_ENABLED=false` for it; it uses `POST /api/v1/moderate/upload`.
+
+`POST /api/v1/moderate` queues the file's link and answers 202. A worker checks it and updates the
+database, so it needs `DATABASE_URL` and the API needs `MEDIA_ALLOWED_HOSTS` (see `.env.example`).
+The API and the workers must use the same settings and environment (`GUARD_MODEL`, `ML_DTYPE`, ...). On a laptop, all the models plus Docker can run out of memory.
 
 ## Measured timings (Phase 1, validation only)
 
