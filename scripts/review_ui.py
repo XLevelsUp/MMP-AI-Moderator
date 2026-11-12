@@ -26,8 +26,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 register_heif_opener()
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
-VIDEO_EXT = {".mp4", ".mov", ".avi"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".gif"}
+VIDEO_EXT = {".mp4", ".mov", ".avi", ".webm", ".mpg", ".mpeg"}
 DECISION_COLOR = {"APPROVED": "green", "HUMAN_REVIEW": "orange", "REJECTED": "red"}
 
 
@@ -112,7 +112,7 @@ with st.sidebar:
     # A 60 s video on the laptop CPU takes several minutes; on a GPU it is seconds.
     request_timeout = st.number_input("Request timeout (s)", min_value=10, max_value=3600, value=900, step=60)
     user_id = st.text_input("user_id", "3f2b8c1e-0000-4000-8000-000000000001")
-    context = st.selectbox("context", ["post", "profile", "breeding", "story"])
+    context = st.selectbox("context", ["post", "profile"])
     type_mode = st.radio("content_type", ["auto (from file extension)", "image", "video"])
     show_local = st.checkbox("Show local details (metadata, pHash)")
     if st.button("Check server"):
@@ -127,7 +127,67 @@ def content_type_for(name: str) -> str:
     return guess_type(name) if type_mode.startswith("auto") else type_mode
 
 
-upload_tab, folder_tab = st.tabs(["Upload files", "Run a folder (timings)"])
+upload_tab, folder_tab, database_tab = st.tabs(["Upload files", "Run a folder (timings)", "Database preview"])
+
+
+def show_row(table, row):
+    """One stored row as a two-column list, so every column can be read."""
+    st.markdown(f"**`{table}`**")
+    if row is None:
+        st.caption("No row.")
+        return
+    st.dataframe(
+        pd.DataFrame([{"column": k, "value": "" if v is None else json.dumps(v) if isinstance(v, (dict, list)) else str(v)}
+                      for k, v in row.items()]),
+        use_container_width=True, hide_index=True,
+    )
+
+
+def status_of(rows):
+    for table, column in (("pets.pet_media", "moderation_status"), ("social.post_media", "moderation_status"),
+                          ("pets.pets", "profile_photo_moderation_status")):
+        if rows.get(table):
+            return rows[table][column]
+    return None
+
+
+with database_tab:
+    st.caption("Each file goes through the real checks and the real database-writing code, on a dummy database. "
+               "The real app gets an empty 202 and reads these rows itself.")
+    base_url = api_url.split("/api/")[0]
+    db_files = st.file_uploader("Drop images or videos", accept_multiple_files=True, key="db_files")
+    entity_label = st.selectbox("Which table holds this file", ["pet_media (a post today)", "post_media", "pet_profile_photo"])
+    simulate = st.checkbox("Simulate a failed check (what's written after 3 failed tries)")
+    if db_files and st.button("Check and store", type="primary"):
+        for f in db_files:
+            data = f.getvalue()
+            content_type = content_type_for(f.name)
+            response = httpx.post(
+                f"{base_url}/api/v1/demo/moderate",
+                files={"file": (f.name, data)},
+                data={"content_type": content_type, "media_type": entity_label.split()[0], "simulate_failure": str(simulate).lower()},
+                timeout=request_timeout,
+            )
+            with st.container(border=True):
+                if response.status_code != 200:
+                    st.error(f"{f.name}: HTTP {response.status_code}: {response.text[:500]}")
+                    continue
+                rows = response.json()["rows"]
+                left, right = st.columns([1, 2])
+                with left:
+                    preview(data, content_type)
+                with right:
+                    status = status_of(rows)
+                    color = {"approved": "green", "in_review": "orange", "rejected": "red"}.get(status, "gray")
+                    st.markdown(f"### {f.name}  :{color}[moderation_status = {status}]")
+                for table, row in rows.items():
+                    show_row(table, row)
+    if st.button("Show the latest stored decisions"):
+        response = httpx.get(f"{base_url}/api/v1/demo/decisions", timeout=30)
+        if response.status_code == 200:
+            st.dataframe(pd.DataFrame(response.json()), use_container_width=True)
+        else:
+            st.error(f"HTTP {response.status_code}: {response.text[:500]}")
 
 with upload_tab:
     files = st.file_uploader("Drop images or videos", accept_multiple_files=True)

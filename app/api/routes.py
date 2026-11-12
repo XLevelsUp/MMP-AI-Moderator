@@ -3,12 +3,11 @@ from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse
 from redis.exceptions import RedisError
 
-from app.api.schemas import ContentContext, ContentType, ModerationRequest, ModerationResponse, QueuedResponse
+from app.api.schemas import ContentContext, ContentType, ModerationRequest, ModerationResponse
 from app.cache.idempotency import IdempotencyStore, UploadKey, get_idempotency_store
 from app.core.config import settings
 from app.core.logging import log_problem, log_result
@@ -28,10 +27,6 @@ def get_job_queue(store: Annotated[IdempotencyStore, Depends(get_idempotency_sto
     return JobQueue(store.redis)
 
 
-def queued(content_id: UUID) -> JSONResponse:
-    return JSONResponse(status_code=202, content=QueuedResponse(content_id=content_id).model_dump(mode="json"))
-
-
 def allowed_link(url: str) -> bool:
     """Only the app's own storage: the service must never fetch an address a caller picks."""
     try:
@@ -47,16 +42,16 @@ def allowed_link(url: str) -> bool:
 @router.post(
     "/api/v1/moderate",
     status_code=202,
-    response_model=QueuedResponse,
+    response_class=Response,
 )
 async def moderate_content(request: ModerationRequest, queue: Annotated[JobQueue, Depends(get_job_queue)]):
-    """Accept the upload and answer at once. A worker checks it and updates the database."""
+    """Accept the upload and answer at once, with no data. A worker checks it and writes to the database."""
     if not allowed_link(request.media_url):
         raise HTTPException(status_code=422, detail="media_url must be an HTTPS link to the app's storage.")
     content_id = uuid4()
     job = Job(
-        str(content_id), str(request.account_id), str(request.pet_id or ""), request.entity_type,
-        str(request.entity_id), request.media_url, request.content_type, request.context,
+        str(content_id), str(request.account_id), str(request.pet_id or ""), request.media_type,
+        str(request.media_id), request.media_url, request.content_type, request.context,
         current_model_version(), time(), str(request.declared_breed_id or ""),
         "" if request.declared_is_cross_breed is None else str(request.declared_is_cross_breed).lower(),
     )
@@ -72,24 +67,7 @@ async def moderate_content(request: ModerationRequest, queue: Annotated[JobQueue
     except RedisError as exc:
         log_problem(503, content_id, f"redis unavailable: {exc}")
         raise HTTPException(status_code=503, detail="Queue unavailable. Try again shortly.")
-    return QueuedResponse(content_id=content_id)
-
-
-@router.get(
-    "/api/v1/moderate/{content_id}",
-    response_model=ModerationResponse,
-    responses={202: {"model": QueuedResponse}},
-)
-async def moderation_result(content_id: UUID, queue: Annotated[JobQueue, Depends(get_job_queue)]):
-    """For debugging and support: the database holds the real result. Kept for queue.result_ttl_seconds."""
-    try:
-        state = await queue.state(content_id)
-    except RedisError as exc:
-        log_problem(503, content_id, f"redis unavailable: {exc}")
-        raise HTTPException(status_code=503, detail="Result store unavailable. Try again shortly.")
-    if state is None:
-        raise HTTPException(status_code=404, detail="Unknown content_id.")
-    return state.response if state.status == "done" else queued(content_id)
+    return Response(status_code=202)
 
 
 @router.post(

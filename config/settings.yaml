@@ -1,4 +1,4 @@
-﻿
+
 limits:
   image_max_bytes: 52428800
   video_max_bytes: 209715200
@@ -42,6 +42,7 @@ intake:
 # Where the worker writes results (moderation.decisions + moderation_status). DATABASE_URL in .env.
 database:
   url: null
+  demo_url: null     # DEMO_DATABASE_URL: the test page's dummy database, on this machine only
   connect_timeout_seconds: 5
 
 # The API accepts only links to the app's own storage. MEDIA_ALLOWED_HOSTS in .env, comma-separated.
@@ -61,7 +62,6 @@ queue:
   image_max_waiting: 2000      # above this the API answers 503 instead of an ever longer wait
   video_max_waiting: 200
   retry_after_seconds: 30      # the Retry-After header on that 503
-  result_ttl_seconds: 86400    # GET /api/v1/moderate/{content_id} works for this long
   reclaim_idle_seconds: 300    # a job untouched this long: its worker died, another takes it over
   reclaim_every_seconds: 30
   reclaim_batch: 10

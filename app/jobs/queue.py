@@ -1,18 +1,13 @@
 """Uploads waiting for the AI: Redis Streams, shared by the API and the GPU workers.
 
-A job stays in the stream until a worker has stored its answer, so a worker that dies loses
-nothing: another worker takes the job over. The state of each job (queued / done / failed) is
-kept separately for GET /api/v1/moderate/{content_id}. The database holds the real result.
+A job stays in the stream until a worker has written its result to the database, so a worker
+that dies loses nothing: another worker takes the job over.
 """
-import json
 from dataclasses import asdict, dataclass
-from time import time
-from uuid import UUID
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
-from app.api.schemas import ModerationResponse
 from app.core.config import settings
 
 
@@ -25,8 +20,8 @@ class Job:
     content_id: str
     account_id: str
     pet_id: str  # empty when the app did not send one
-    entity_type: str
-    entity_id: str
+    media_type: str
+    media_id: str
     media_url: str
     content_type: str
     context: str
@@ -41,16 +36,6 @@ class Delivery:
     stream: str
     message_id: str
     job: Job
-
-
-@dataclass(frozen=True)
-class JobState:
-    status: str  # queued or done
-    response: ModerationResponse | None = None
-
-
-def state_key(content_id: UUID | str) -> str:
-    return f"mod:job:{content_id}"
 
 
 def stream_for(content_type: str) -> str:
@@ -86,16 +71,7 @@ class JobQueue:
         stream = stream_for(job.content_type)
         if await self.redis.xlen(stream) >= limit:
             raise QueueFull()
-        await self.redis.set(state_key(job.content_id), json.dumps({"status": "queued"}), ex=q.result_ttl_seconds)
         await self.redis.xadd(stream, {k: str(v) for k, v in asdict(job).items()})
-
-    async def state(self, content_id: UUID | str) -> JobState | None:
-        raw = await self.redis.get(state_key(content_id))
-        if raw is None:
-            return None
-        data = json.loads(raw)
-        response = ModerationResponse.model_validate(data["response"]) if "response" in data else None
-        return JobState(data["status"], response)
 
     async def next_job(self, consumer: str, *, video_first: bool = False) -> Delivery | None:
         """The next waiting job, photos before videos unless video_first. Never blocks."""
@@ -123,11 +99,6 @@ class JobQueue:
                 attempts = pending[0]["times_delivered"] if pending else 1
                 taken.append((Delivery(stream, decoded(message_id), job_from(fields)), attempts))
         return taken
-
-    async def complete(self, delivery: Delivery, response: ModerationResponse) -> None:
-        state = {"status": "done", "response": response.model_dump(mode="json")}
-        await self.redis.set(state_key(delivery.job.content_id), json.dumps(state), ex=settings.queue.result_ttl_seconds)
-        await self.remove(delivery)
 
     async def remove(self, delivery: Delivery) -> None:
         await self.redis.xack(delivery.stream, settings.queue.group, delivery.message_id)

@@ -12,7 +12,7 @@ yet is the service around it (deployment, review queue, monitoring) — see
 
 | Step | What it does | Models |
 |---|---|---|
-| Queue | `POST /api/v1/moderate` takes the file's link as JSON, queues it in Redis Streams and answers 202 at once. GPU workers (`python -m app.worker`) download and check one job at a time and update the database directly: `moderation.decisions` and `moderation_status`. Photos first, but a video waits for at most 8 photos. A failed job is retried, then goes to a moderator. A full queue answers 503 | — |
+| Queue | `POST /api/v1/moderate` takes the file's link as JSON, queues it in Redis Streams and answers 202 with no data. GPU workers (`python -m app.worker`) download and check one job at a time and update the database directly: `moderation.decisions` and `moderation_status`. Photos first, but a video waits for at most 8 photos. A job is tried 3 times; after that every score is written as 0 with the reason `check_incomplete`, and a moderator gets it. A full queue answers 503 | — |
 | Validation | format, size, duration, decode, metadata; duplicate cache and perceptual-hash blocklist in Redis | — |
 | Prepare | resize; videos sampled at 1 frame per second (0.5 s under 10 s), GPU decoding when available | — |
 | Gate 1 | pet score from SigLIP + the OWLv2 animal detector + BioCLIP species; no pet = answer at once (MOD_001); wild / marine animals go to review when 2 of 3 views agree. A trained head (pet / wild / no_pet, logistic regression on the SigLIP + BioCLIP embeddings) double-checks every pass: if it is ≥ 0.8 sure there is no pet, a human looks (`gate1.decider: check`) | SigLIP 2, OWLv2, BioCLIP 2, Gate 1 head |
@@ -75,6 +75,9 @@ wording, the image size or the model change). `act_from` stays at the model card
 real harmful examples set it from the spec's recall targets.
 
 ## Known limitations
+
+- **Zero scores on failure (decided 3 Nov 2026):** a failed check writes 0 in every score, and in our scale 0 means the worst result. Anything reading scores (dashboards, training data, tuning) must first leave out rows with `check_incomplete` in `reason_codes`.
+- **Lost requests:** the API sends back no data, so a row stuck on `pending` means its request never reached the queue. The app has to re-send such rows.
 
 - **Breed check:** the fields are in the request, result and database, but the check isn't built, so every result says `not_checked`. A result stays in the database even if the user swaps the file while the job waits; a swap made while a job runs can be overwritten by that job's status.
 

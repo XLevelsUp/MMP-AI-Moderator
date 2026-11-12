@@ -32,33 +32,26 @@ class DetectedObject(BaseModel):
     score: float = Field(ge=0, le=1)   # the detector's confidence for its best box
 
 
-EntityType = Literal["pet_media", "post_media", "pet_profile_photo"]
-ENTITY_CONTEXT = {"pet_media": "post", "post_media": "post", "pet_profile_photo": "profile"}
+MediaType = Literal["pet_media", "post_media", "pet_profile_photo"]
+MEDIA_CONTEXT = {"pet_media": "post", "post_media": "post", "pet_profile_photo": "profile"}
 
 
 class ModerationRequest(BaseModel):
     media_url: str
     content_type: ContentType
     account_id: UUID                # identity.accounts.id
-    entity_type: EntityType         # which table holds this file
-    entity_id: UUID                 # the row whose moderation_status gets updated
+    media_type: MediaType           # which table holds this file
+    media_id: UUID                  # the row whose moderation_status gets updated
     pet_id: UUID | None = None
     context: Literal["post", "profile"] = "post"
     declared_breed_id: UUID | None = None           # pets.breeds.id: the breed the user claimed
     declared_is_cross_breed: bool | None = None     # a cross breed has no single breed to match
 
     @model_validator(mode="after")
-    def context_matches_entity(self):
-        if ENTITY_CONTEXT[self.entity_type] != self.context:
-            raise ValueError(f"context {self.context} does not go with entity_type {self.entity_type}")
+    def context_matches_media(self):
+        if MEDIA_CONTEXT[self.media_type] != self.context:
+            raise ValueError(f"context {self.context} does not go with media_type {self.media_type}")
         return self
-
-
-class QueuedResponse(BaseModel):
-    """HTTP 202: accepted. The worker writes the result to the database."""
-
-    content_id: UUID
-    status: Literal["queued"] = "queued"
 
 
 class BreedCheck(BaseModel):

@@ -19,7 +19,7 @@ from app.cache.idempotency import IdempotencyStore, UploadKey, make_redis
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.jobs.queue import Delivery, JobQueue
-from app.jobs.results import DecisionStore
+from app.jobs.results import DecisionStore, failure_fallback
 from app.ml.registry import load_models
 from app.pipeline.context import ModerationContext
 from app.pipeline.orchestrator import finish, run_pipeline
@@ -59,7 +59,7 @@ class Worker:
             return finish(ctx), None, None
         ctx.size_bytes, ctx.sha256 = intake.size_bytes, intake.sha256
 
-        key = UploadKey(intake.sha256, UUID(job.account_id), job.content_type, job.context, job.model_version, job.entity_id)
+        key = UploadKey(intake.sha256, UUID(job.account_id), job.content_type, job.context, job.model_version, job.media_id)
         cached = await self.store.get_cached(key)
         if cached is not None:  # sent again: same file, same row, same models
             return cached.model_copy(update={"content_id": ctx.content_id}), intake.sha256, intake.size_bytes
@@ -75,8 +75,10 @@ class Worker:
         logger.info("job %s %s waited %.1f s", job.content_id, job.content_type, time() - job.queued_at)
         try:
             response, sha256, size = await self.answer(delivery, ctx)
+            if "gate1_unavailable" in response.flags:  # a model failed to load: no real scores
+                response = failure_fallback(response)
             await asyncio.to_thread(self.decisions.save, job, response, sha256, size)
-            await self.queue.complete(delivery, response)
+            await self.queue.remove(delivery)
         except Exception:
             logger.exception("job %s failed, will be retried", job.content_id)
         finally:
@@ -84,12 +86,12 @@ class Worker:
             remove_temp_file(settings.temp_dir / f"{job.content_id}.upload")
 
     async def give_up(self, delivery: Delivery) -> None:
-        """No decision is possible, so the post stays hidden and a moderator looks at it."""
+        """No decision is possible: zeros are written, the post stays hidden and a moderator looks at it."""
         ctx = self.context_for(delivery)
         ctx.flags.append("check_incomplete")
-        response = ctx.to_response()
-        await asyncio.to_thread(self.decisions.save, delivery.job, response, None, None)
-        await self.queue.complete(delivery, response)
+        response = failure_fallback(ctx.to_response())
+        await asyncio.to_thread(self.decisions.save, delivery.job, response, None, 0)
+        await self.queue.remove(delivery)
 
     async def reclaim(self) -> None:
         for delivery, attempts in await self.queue.reclaim(self.consumer):

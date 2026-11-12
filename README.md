@@ -30,7 +30,7 @@ The test page runs through `uvx` in its own environment because Streamlit requir
 `pillow<13`, while the service uses Pillow 13. It expects an answer in the same request, so run
 the API with `QUEUE_ENABLED=false` for it; it uses `POST /api/v1/moderate/upload`.
 
-`POST /api/v1/moderate` queues the file's link and answers 202. A worker checks it and updates the
+`POST /api/v1/moderate` queues the file's link and answers 202 with no data. A worker checks it and updates the
 database, so it needs `DATABASE_URL` and the API needs `MEDIA_ALLOWED_HOSTS` (see `.env.example`).
 The API and the workers must use the same settings and environment (`GUARD_MODEL`, `ML_DTYPE`, ...). On a laptop, all the models plus Docker can run out of memory.
 

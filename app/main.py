@@ -2,6 +2,7 @@ import tempfile
 
 from fastapi import FastAPI
 
+from app.api.demo import router as demo_router
 from app.api.routes import router
 from app.core.config import settings
 from app.core.versioning import current_model_version
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MeetMyPets Moderation POC", lifespan=lifespan)
 app.include_router(router)
+app.include_router(demo_router)
 
 
 

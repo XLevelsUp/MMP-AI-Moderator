@@ -60,6 +60,7 @@ class IntakeSettings(StrictModel):
 
 class DatabaseSettings(StrictModel):
     url: str | None
+    demo_url: str | None   # the test page's dummy database: never the real one
     connect_timeout_seconds: int = Field(ge=1)
 
 
@@ -79,7 +80,6 @@ class QueueSettings(StrictModel):
     image_max_waiting: int = Field(ge=1)
     video_max_waiting: int = Field(ge=1)
     retry_after_seconds: int = Field(ge=1)
-    result_ttl_seconds: int = Field(ge=1)
     reclaim_idle_seconds: int = Field(ge=1)
     reclaim_every_seconds: int = Field(ge=1)
     reclaim_batch: int = Field(ge=1)
@@ -566,6 +566,7 @@ def load_settings(path: Path = CONFIG_FILE) -> AppSettings:
     data["redis"]["url"] = os.getenv("REDIS_URL", data["redis"]["url"])
     # Secrets and per-deployment values stay out of this file.
     data["database"]["url"] = os.getenv("DATABASE_URL", data["database"]["url"])
+    data["database"]["demo_url"] = os.getenv("DEMO_DATABASE_URL", data["database"]["demo_url"])
     hosts = os.getenv("MEDIA_ALLOWED_HOSTS")
     if hosts is not None:
         data["media"]["allowed_hosts"] = [host.strip().lower() for host in hosts.split(",") if host.strip()]

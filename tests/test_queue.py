@@ -15,7 +15,7 @@ from app.api.schemas import BreedCheck, ModerationResponse
 from app.cache.idempotency import IdempotencyStore
 from app.core.config import settings
 from app.jobs.queue import Job, JobQueue, QueueFull
-from app.jobs.results import outcome_for, reason_codes, storage_path_of
+from app.jobs.results import failure_fallback, outcome_for, reason_codes, storage_path_of
 from app.pipeline import orchestrator
 from app.prepare import prepare_media
 from app.prepare.video import prepare_animated
@@ -69,14 +69,14 @@ def worker(parts, decisions=None, transport=None, name="w1"):
     return Worker(parts[0], parts[1], decisions or FakeDecisions(), name, transport or serving())
 
 
-def make_job(content_type="image", entity_type="pet_media", entity_id=None) -> Job:
-    return Job(str(uuid4()), USER, "", entity_type, entity_id or str(uuid4()), URL, content_type,
-               "profile" if entity_type == "pet_profile_photo" else "post", "v1", time())
+def make_job(content_type="image", media_type="pet_media", media_id=None) -> Job:
+    return Job(str(uuid4()), USER, "", media_type, media_id or str(uuid4()), URL, content_type,
+               "profile" if media_type == "pet_profile_photo" else "post", "v1", time())
 
 
 def body(**changes):
-    return {"media_url": URL, "content_type": "image", "account_id": USER, "entity_type": "pet_media",
-            "entity_id": str(uuid4()), **changes}
+    return {"media_url": URL, "content_type": "image", "account_id": USER, "media_type": "pet_media",
+            "media_id": str(uuid4()), **changes}
 
 
 def run(coro):
@@ -99,7 +99,7 @@ def test_request_is_queued_with_202_at_once(client, queue_on, parts):
     run(parts[0].ensure_groups())
     r = client.post("/api/v1/moderate", json=body())
     assert r.status_code == 202
-    assert r.json()["status"] == "queued"
+    assert r.content == b""                     # no response data: the result goes to the database
     assert run(parts[0].waiting()) == {"image": 1, "video": 0}
 
 
@@ -114,9 +114,9 @@ def test_only_links_to_the_apps_storage(client, queue_on, parts, url):
 
 @pytest.mark.parametrize("changes", [
     {"context": "profile"},                                        # pet_media goes with post
-    {"entity_type": "pet_profile_photo", "context": "post"},
-    {"context": "story"}, {"entity_type": "chat_image"}, {"content_type": "gif"},
-    {"account_id": "nope"}, {"entity_id": "nope"},
+    {"media_type": "pet_profile_photo", "context": "post"},
+    {"context": "story"}, {"media_type": "chat_image"}, {"content_type": "gif"},
+    {"account_id": "nope"}, {"media_id": "nope"},
 ])
 def test_bad_request_is_422(client, queue_on, changes):
     assert client.post("/api/v1/moderate", json=body(**changes)).status_code == 422
@@ -131,18 +131,8 @@ def test_full_queue_is_503_with_retry_after(client, queue_on, parts, monkeypatch
     assert r.headers["retry-after"] == str(settings.queue.retry_after_seconds)
 
 
-def test_result_is_202_then_the_answer(client, queue_on, parts):
-    run(parts[0].ensure_groups())
-    content_id = client.post("/api/v1/moderate", json=body()).json()["content_id"]
-    assert client.get(f"/api/v1/moderate/{content_id}").status_code == 202
-    assert run(worker(parts).step()) is True
-    r = client.get(f"/api/v1/moderate/{content_id}")
-    assert r.status_code == 200
-    assert r.json()["content_id"] == content_id
-
-
-def test_unknown_result_is_404(client):
-    assert client.get(f"/api/v1/moderate/{uuid4()}").status_code == 404
+def test_there_is_no_result_call(client, queue_on):
+    assert client.get(f"/api/v1/moderate/{uuid4()}").status_code in (404, 405)
 
 
 def test_upload_route_is_off_with_the_queue(client, queue_on):
@@ -159,12 +149,12 @@ def answer(decision, code=None, flags=()):
 
 
 @pytest.mark.parametrize("response, status, code, review", [
-    (answer("APPROVED"), "approved", None, None),
+    (answer("APPROVED"), "approved", None, "done"),
     (answer("HUMAN_REVIEW"), "in_review", None, "pending"),
     (answer("REJECTED", "MOD_001", ["no_pet_detected"]), "in_review", None, "pending"),   # a moderator decides
     (answer("REJECTED", "MOD_002", ["welfare_abuse"]), "in_review", None, "pending"),
-    (answer("REJECTED", "MOD_008", ["corrupt_file"]), "rejected", "MOD_008", None),       # nothing to look at
-    (answer("REJECTED", "MOD_004", ["quarantined"]), "rejected", "MOD_004", None),        # must never be seen
+    (answer("REJECTED", "MOD_008", ["corrupt_file"]), "in_review", None, "pending"),   # a moderator decides
+    (answer("REJECTED", "MOD_004", ["quarantined"]), "in_review", None, "pending"),    # decided, never displayed
 ])
 def test_status_for_each_answer(response, status, code, review):
     outcome = outcome_for(response)
@@ -233,19 +223,18 @@ def test_worker_writes_the_result_and_cleans_up(queue_on, parts, temp_dir):
     async def go():
         await enqueue_all(parts[0], job)
         await worker(parts, decisions).step()
-        return await parts[0].state(job.content_id), await parts[0].waiting()
+        return await parts[0].waiting()
 
-    state, waiting = run(go())
+    waiting = run(go())
     assert len(decisions.saved) == 1
     saved = decisions.saved[0]
     assert saved.job == job and len(saved.sha256) == 64 and saved.size == len(jpeg_bytes())
-    assert state.status == "done"
     assert waiting == {"image": 0, "video": 0}
     assert uploads(temp_dir) == []
 
 
 @pytest.mark.parametrize("content, status, flag", [(b"", 200, "empty_file"), (b"not an image", 200, "unsupported_format")])
-def test_bad_file_is_written_as_rejected(queue_on, parts, content, status, flag):
+def test_bad_file_goes_to_a_moderator(queue_on, parts, content, status, flag):
     decisions = FakeDecisions()
 
     async def go():
@@ -255,7 +244,7 @@ def test_bad_file_is_written_as_rejected(queue_on, parts, content, status, flag)
     run(go())
     response = decisions.saved[0].response
     assert response.rejection_code == "MOD_008" and flag in response.flags
-    assert outcome_for(response).moderation_status == "rejected"
+    assert (outcome_for(response).moderation_status, outcome_for(response).review_status) == ("in_review", "pending")
 
 
 def test_file_over_the_limit_stops_the_download(queue_on, parts, monkeypatch):
@@ -275,8 +264,8 @@ def test_sent_again_reuses_the_check_but_still_writes(queue_on, parts, monkeypat
     real = orchestrator.run_pipeline
     monkeypatch.setattr("app.worker.run_pipeline", lambda ctx: calls.append(1) or real(ctx))
     decisions = FakeDecisions()
-    entity = str(uuid4())
-    first, second, other = make_job(entity_id=entity), make_job(entity_id=entity), make_job()
+    media = str(uuid4())
+    first, second, other = make_job(media_id=media), make_job(media_id=media), make_job()
 
     async def go():
         await enqueue_all(parts[0], first, second, other)
@@ -304,10 +293,9 @@ def test_failure_keeps_the_job_for_a_retry(queue_on, parts, temp_dir, monkeypatc
     async def go():
         await enqueue_all(parts[0], job)
         await worker(parts, decisions, transport).step()
-        return await parts[0].state(job.content_id), await parts[0].waiting()
+        return await parts[0].waiting()
 
-    state, waiting = run(go())
-    assert state.status == "queued"
+    waiting = run(go())
     assert waiting["image"] == 1
     assert decisions.saved == []
     assert uploads(temp_dir) == []
@@ -333,9 +321,48 @@ def test_a_failing_job_goes_to_a_moderator_after_the_retries(queue_on, parts, mo
     assert waiting == {"image": 0, "video": 0}
     assert len(decisions.saved) == 1
     saved = decisions.saved[0]
-    assert saved.sha256 is None and saved.response.decision == "HUMAN_REVIEW"
+    assert saved.sha256 is None and saved.size == 0 and saved.response.decision == "HUMAN_REVIEW"
     assert saved.response.flags == ["check_incomplete"]
+    assert reason_codes(saved.response) == ["check_incomplete"]     # how a zero row is told apart
     assert outcome_for(saved.response).moderation_status == "in_review"
+    r = saved.response
+    assert r.pet_score == 0 and r.composite_score == 0 and r.ai_score == 0 and r.ai_generated is False
+    assert set(r.dimension_scores.model_dump().values()) == {0.0}
+    assert r.breed_check.match_score == 0 and r.breed_check.detected_score == 0
+    assert r.breed_check.status == "not_checked"
+
+
+def test_a_model_that_failed_to_load_writes_zeros_too(queue_on, parts, monkeypatch):
+    monkeypatch.setattr("app.worker.run_pipeline", lambda ctx: answer("HUMAN_REVIEW", flags=["gate1_unavailable"]))
+    decisions = FakeDecisions()
+
+    async def go():
+        await enqueue_all(parts[0], make_job())
+        await worker(parts, decisions).step()
+
+    run(go())
+    saved = decisions.saved[0].response
+    assert saved.pet_score == 0 and outcome_for(saved).moderation_status == "in_review"
+    assert reason_codes(saved) == ["check_incomplete"]
+
+
+def test_a_real_answer_is_not_zeroed(queue_on, parts):
+    decisions = FakeDecisions()
+
+    async def go():
+        await enqueue_all(parts[0], make_job())
+        await worker(parts, decisions, serving(b"not an image")).step()   # a bad file is a result, not an error
+
+    run(go())
+    saved = decisions.saved[0].response
+    assert saved.pet_score is None and saved.dimension_scores is None
+    assert saved.rejection_code == "MOD_008"
+
+
+def test_fallback_keeps_who_and_what():
+    original = answer("HUMAN_REVIEW", flags=["check_incomplete"])
+    fallback = failure_fallback(original)
+    assert fallback.content_id == original.content_id and fallback.model_version == original.model_version
 
 
 def test_a_dead_workers_job_is_taken_over(queue_on, parts, monkeypatch):
@@ -430,6 +457,27 @@ def test_enqueue_refuses_when_full(queue_on, parts, monkeypatch):
             await parts[0].enqueue(make_job("video"))
 
     run(go())
+
+
+def demo_post(client):
+    return client.post("/api/v1/demo/moderate", files={"file": ("x.jpg", jpeg_bytes(), "image/jpeg")}, data={"content_type": "image"})
+
+
+def test_database_preview_is_off_by_default(client, monkeypatch):
+    monkeypatch.setattr(settings.database, "demo_url", None)
+    assert demo_post(client).status_code == 404
+    assert client.get("/api/v1/demo/decisions").status_code == 404
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql://u:p@db.abcdefgh.supabase.co:5432/postgres",
+    "postgresql://u:p@aws-0-ap.pooler.supabase.com:6543/postgres",
+    "postgresql://u:p@127.0.0.1.evil.com/postgres",
+])
+def test_database_preview_refuses_any_remote_database(client, monkeypatch, url):
+    monkeypatch.setattr(settings.database, "demo_url", url)
+    assert demo_post(client).status_code == 403
+    assert client.get("/api/v1/demo/decisions").status_code == 403
 
 
 def test_worker_needs_a_database(monkeypatch):

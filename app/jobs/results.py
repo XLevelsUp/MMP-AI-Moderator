@@ -6,7 +6,7 @@ from urllib.parse import unquote, urlsplit
 
 import psycopg
 
-from app.api.schemas import ModerationResponse
+from app.api.schemas import BreedCheck, DimensionScores, ModerationResponse
 from app.core.config import settings
 from app.jobs.queue import Job
 
@@ -27,16 +27,26 @@ INCOMPLETE_FLAGS = {"gate1_unavailable", "nsfw_unavailable", "guard_unavailable"
 class Outcome:
     moderation_status: str
     rejection_code: str | None  # only when the status is final
-    review_status: str | None   # pending = in the moderators' queue
+    review_status: str          # pending = in the moderators' queue; done = nothing for a moderator to do
 
 
 def outcome_for(response: ModerationResponse) -> Outcome:
-    """Moderators decide every rejection, except files they can't or must never look at."""
+    """Only an AI approval is final. Everything else waits for a moderator (decided 12 Nov 2026),
+    bad files (MOD_008) and hash-list matches included. A hash-list match's file must never be
+    displayed: the panel shows its details only."""
     if response.decision == "APPROVED":
-        return Outcome("approved", None, None)
-    if response.rejection_code == "MOD_008" or "quarantined" in response.flags:
-        return Outcome("rejected", response.rejection_code, None)
+        return Outcome("approved", None, "done")
     return Outcome("in_review", None, "pending")
+
+
+def failure_fallback(response: ModerationResponse) -> ModerationResponse:
+    """Decided 2026-11-03: a check that failed writes 0 in every score. These zeros are NOT results:
+    the reason code check_incomplete marks such a row, so filter on it before using scores."""
+    zero_dimensions = DimensionScores(**dict.fromkeys(DimensionScores.model_fields, 0.0))
+    return response.model_copy(update={
+        "pet_score": 0.0, "composite_score": 0.0, "ai_generated": False, "ai_score": 0.0,
+        "dimension_scores": zero_dimensions, "breed_check": BreedCheck(match_score=0.0, detected_score=0.0),
+    })
 
 
 def reason_codes(response: ModerationResponse) -> list[str]:
@@ -59,13 +69,13 @@ def storage_path_of(media_url: str) -> str:
 
 INSERT_DECISION = """
 insert into moderation.decisions (
-  id, account_id, pet_id, entity_type, entity_id, storage_path, media_sha256, media_size_bytes,
+  id, account_id, pet_id, media_type, media_id, storage_path, media_sha256, media_size_bytes,
   content_type, context, decision, rejection_code, hard_reject, pet_score, composite_score,
   dimension_scores, ai_generated, ai_score, reason_codes, flags, species_detected, detected_objects,
   processing_ms, model_version, review_status, declared_breed_id, declared_is_cross_breed, breed_status,
   breed_match_score, detected_breed_id, detected_breed_name, detected_breed_score
 ) values (
-  %(id)s, %(account_id)s, %(pet_id)s, %(entity_type)s, %(entity_id)s, %(storage_path)s, %(sha256)s, %(size_bytes)s,
+  %(id)s, %(account_id)s, %(pet_id)s, %(media_type)s, %(media_id)s, %(storage_path)s, %(sha256)s, %(size_bytes)s,
   %(content_type)s, %(context)s, %(decision)s, %(rejection_code)s, %(hard_reject)s, %(pet_score)s, %(composite_score)s,
   %(dimension_scores)s, %(ai_generated)s, %(ai_score)s, %(reason_codes)s, %(flags)s, %(species)s, %(objects)s,
   %(processing_ms)s, %(model_version)s, %(review_status)s, %(declared_breed_id)s, %(declared_is_cross_breed)s,
@@ -112,7 +122,7 @@ class DecisionStore:
         objects = [o.model_dump() for o in response.objects_detected] or None
         row = {
             "id": job.content_id, "account_id": job.account_id, "pet_id": job.pet_id or None,
-            "entity_type": job.entity_type, "entity_id": job.entity_id, "storage_path": storage_path_of(job.media_url),
+            "media_type": job.media_type, "media_id": job.media_id, "storage_path": storage_path_of(job.media_url),
             "sha256": sha256, "size_bytes": size_bytes, "content_type": job.content_type, "context": job.context,
             "decision": response.decision, "rejection_code": response.rejection_code, "hard_reject": response.hard_reject,
             "pet_score": response.pet_score, "composite_score": response.composite_score,
@@ -127,13 +137,13 @@ class DecisionStore:
             "detected_breed_id": breed.detected_breed_id, "detected_breed_name": breed.detected_breed_name,
             "detected_breed_score": breed.detected_score,
         }
-        target = {"status": outcome.moderation_status, "code": outcome.rejection_code, "id": job.entity_id}
+        target = {"status": outcome.moderation_status, "code": outcome.rejection_code, "id": job.media_id}
         with psycopg.connect(self.url, connect_timeout=settings.database.connect_timeout_seconds) as db:
             db.execute(INSERT_DECISION, row)
-            if job.entity_type == "pet_media":
+            if job.media_type == "pet_media":
                 found = db.execute(UPDATE_PET_MEDIA, target).rowcount
                 db.execute(UPDATE_POST_WITH_SAME_ID, target)
-            elif job.entity_type == "post_media":
+            elif job.media_type == "post_media":
                 post = db.execute(UPDATE_POST_MEDIA, target).fetchone()
                 found = 1 if post else 0
                 if post:
@@ -142,4 +152,4 @@ class DecisionStore:
             else:
                 found = db.execute(UPDATE_PET_PHOTO, target).rowcount
         if not found:  # deleted while it waited: the record is still kept
-            logger.warning("job %s: no %s row %s to update", job.content_id, job.entity_type, job.entity_id)
+            logger.warning("job %s: no %s row %s to update", job.content_id, job.media_type, job.media_id)
