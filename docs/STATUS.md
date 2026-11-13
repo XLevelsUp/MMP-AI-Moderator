@@ -134,7 +134,7 @@ How to deploy: [docs/DEPLOY.md](DEPLOY.md). Built:
 | API key on `POST /api/v1/moderate` (`X-API-Key`, `API_KEYS`) | `app/api/security.py` |
 | Production start-up checks: refuses to start without keys, allowed hosts or a database | `app/api/security.py` |
 | Media links only from allowed hosts under `/storage/v1/object/`, checked by the API and again by the worker | `app/validation/intake.py` |
-| The worker checks a link is the row's own file before writing; a mismatch is dropped and logged | `app/jobs/results.py`, migration `20261113100000_media_path_read` |
+| Optional (off): the worker checks a link is the row's own file before writing (`CHECK_ROW_PATH=true` plus migration `20261113100000_media_path_read`) | `app/jobs/results.py` |
 | `/health/live`, `/health/ready` (Redis, queue length, workers running), JSON logs | `app/main.py`, `app/core/logging.py` |
 | Part-time GPU: `--exit-when-empty`, worker heartbeat; the server shuts itself down after the queue is empty | `app/worker.py`, `deploy/run-worker.sh`, `deploy/mmp-worker.service` |
 | Redis that keeps waiting jobs over a restart (append-only log), password, VPC-only | `deploy/redis.conf`, `deploy/docker-compose.api.yml` |

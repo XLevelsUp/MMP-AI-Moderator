@@ -270,3 +270,16 @@ def test_giving_up_skips_the_path_check(queue_on, parts):
 
     run(go())
     assert seen == [False]
+
+
+def test_production_worker_refuses_to_start_when_a_model_failed(monkeypatch):
+    import app.worker as worker_module
+    from app.ml.registry import registry
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings.media, "allowed_hosts", [HOST])
+    monkeypatch.setattr(settings.database, "url", "postgresql://u:p@db.example.com/postgres")
+    monkeypatch.setattr(worker_module, "get_csam_checker", lambda: None)
+    monkeypatch.setattr(worker_module, "load_models", lambda: registry.status.update({"shieldstral": "failed: needs accelerate"}))
+    monkeypatch.setattr(worker_module, "serve", lambda: (_ for _ in ()).throw(AssertionError("must not start")))
+    with pytest.raises(SystemExit, match="shieldstral"):
+        worker_module.main()

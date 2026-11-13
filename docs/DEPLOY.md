@@ -28,7 +28,8 @@ Run in the Supabase SQL Editor, in this order, on staging first and production o
 
 1. `db/migrations/20261104100000_moderation_schema.sql`
 2. `db/migrations/20261112100000_review_status_done.sql`
-3. `db/migrations/20261113100000_media_path_read.sql` (lets the worker check a link is the row's own file)
+3. Optional, only if you turn on `CHECK_ROW_PATH=true`: `db/migrations/20261113100000_media_path_read.sql`
+   (lets the worker check a link is the row's own file; off by default)
 4. Give the worker its login. Keep the password out of chat and the repo:
 
    ```sql

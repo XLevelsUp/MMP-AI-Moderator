@@ -610,6 +610,9 @@ def load_settings(path: Path = CONFIG_FILE) -> AppSettings:
     temp = os.getenv("TEMP_DIR")
     if temp:
         data["temp_dir"] = temp
+    check_path = os.getenv("CHECK_ROW_PATH")
+    if check_path is not None:
+        data["media"]["check_row_path"] = check_path.lower() == "true"
     quarantine = os.getenv("QUARANTINE_DIR")  # same: the laptop's D:\ path is no use on a server
     if quarantine:
         data["safety"]["quarantine_dir"] = quarantine

@@ -86,6 +86,7 @@ def run() -> None:
     import psycopg
 
     host = os.environ["MEDIA_HOST"]
+    check_rows = os.environ.get("CHECK_ROW_PATH", "false").lower() == "true"  # the link-to-row check is optional
     staged = json.loads(STAGED_LIST.read_text())
     checks: list[tuple[str, bool, str]] = []
 
@@ -155,7 +156,12 @@ def run() -> None:
     total = time.time() - started
     sampler.stop.set()
     log = worker_log.read_text(errors="replace")
+    not_loaded = [line for line in log.splitlines() if "failed to load" in line or "models not loaded" in line]
+    check("every model loaded on the GPU", not not_loaded, (not_loaded[0][:300] if not_loaded else ""))
     check("worker stopped by itself when the queue was empty", status == 0, f"status {status}")
+    if not_loaded:
+        print(log[-3000:])
+        sys.exit("A model did not load, so no upload was really checked. See above.")
     ready_line = next((json.loads(line) for line in log.splitlines()
                        if line.startswith("{") and '"logger": "mmp.worker"' in line and " ready" in line), None)
     load_s = None
@@ -163,7 +169,8 @@ def run() -> None:
         first_line = next(json.loads(line) for line in log.splitlines() if line.startswith("{"))
         load_s = round(_ts(ready_line["time"]) - _ts(first_line["time"]), 1)
     check("worker logs are JSON", ready_line is not None)
-    check("mismatched link dropped and logged", "the link is not this row's file" in log)
+    if check_rows:
+        check("mismatched link dropped and logged", "the link is not this row's file" in log)
     ready = httpx.get(f"{API}/health/ready", timeout=5).json()
     check("queue empty afterwards", sum(ready["waiting"].values()) == 0, json.dumps(ready["waiting"]))
     check("worker heartbeat cleared", ready["workers_running"] == 0)
@@ -177,7 +184,8 @@ def run() -> None:
         mismatch = db.execute("select moderation_status, (select count(*) from moderation.decisions where media_id = %s) "
                               "from pets.pet_media where id = %s", (mismatch_id, mismatch_id)).fetchone()
     check(f"a decision row for every upload ({len(staged)})", all(f["media_id"] in rows for f in staged), f"{len(rows)} rows")
-    check("mismatched row untouched: no decision, status unchanged", mismatch == ("approved", 0), str(mismatch))
+    if check_rows:
+        check("mismatched row untouched: no decision, status unchanged", mismatch == ("approved", 0), str(mismatch))
     incomplete = [f["name"] for f in staged if f["media_id"] in rows and "check_incomplete" in rows[f["media_id"]][4]]
     check("no check left incomplete", not incomplete, ", ".join(incomplete))
     status_ok = all(rows[f["media_id"]][6] == ("approved" if rows[f["media_id"]][1] == "APPROVED" else "in_review")
@@ -199,6 +207,10 @@ def run() -> None:
     bads = [rows[f["media_id"]] for f in staged if f["group"] == "bad" and f["media_id"] in rows]
     images = [rows[f["media_id"]][5] for f in staged if f["content_type"] == "image" and f["media_id"] in rows and f["group"] != "bad"]
     videos = [rows[f["media_id"]][5] for f in staged if f["content_type"] == "video" and f["media_id"] in rows and f["group"] != "bad"]
+
+    processed = [r for r in rows.values() if r[5] > 0]
+    check("uploads really processed by the models", len(processed) >= len(staged) - 1,
+          f"{len(processed)} of {len(staged)} have a processing time")
 
     def p95(values):
         return sorted(values)[max(0, int(round(0.95 * len(values))) - 1)] if values else None

@@ -49,6 +49,10 @@ python -m scripts.download_models --ocr
 export HF_HUB_OFFLINE=1
 
 step "4/6 Redis (password, append-only) and Postgres (stand-in tables + the real migrations)"
+# A second run in the same notebook: stop what the last run left behind.
+pkill -f "redis-server" 2>/dev/null || true; pkill -f "cloudflared tunnel" 2>/dev/null || true
+pkill -f "http.server" 2>/dev/null || true; pkill -f "uvicorn app.main" 2>/dev/null || true
+sleep 1
 REDIS_PASSWORD=$(python -c "import secrets; print(secrets.token_hex(16))")
 mkdir -p /tmp/redis
 redis-server --daemonize yes --requirepass "$REDIS_PASSWORD" --appendonly yes --dir /tmp/redis >/dev/null
@@ -57,7 +61,10 @@ export REDIS_URL="redis://:$REDIS_PASSWORD@127.0.0.1:6379/0"
 service postgresql start >/dev/null
 DB_PASSWORD=$(python -c "import secrets; print(secrets.token_hex(16))")
 su postgres -c "psql -qc \"alter user postgres password '$DB_PASSWORD'\""
-su postgres -c "dropdb --if-exists buildtest" && su postgres -c "createdb buildtest"
+su postgres -c "dropdb --if-exists buildtest"
+# Roles outlive a dropped database: remove the ones a previous run created.
+su postgres -c "psql -q -c 'drop role if exists moderation_service, service_role, authenticated, anon'"
+su postgres -c "createdb buildtest"
 cp data/demo_stub.sql db/migrations/*.sql /tmp/ && chmod a+r /tmp/*.sql
 cat > /tmp/service_role.sql <<'SQL'
 do $$ begin
@@ -79,15 +86,23 @@ if [ ! -x /tmp/cloudflared ]; then
 fi
 MEDIA_ROOT=/tmp/media
 python scripts/build_test_run.py --stage-files "$ROOT/test_media" "$MEDIA_ROOT"
-(cd "$MEDIA_ROOT" && python -m http.server 8080 --bind 127.0.0.1 >/tmp/media_server.log 2>&1 &)
-/tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 >/tmp/tunnel.log 2>&1 &
+# Colab already runs its own server on 8080, so the files go on a port nobody uses.
+MEDIA_PORT=8765
+python -m http.server $MEDIA_PORT --bind 127.0.0.1 --directory "$MEDIA_ROOT" >/tmp/media_server.log 2>&1 &
+sleep 2
+curl -sf -o /dev/null "http://127.0.0.1:$MEDIA_PORT/storage/v1/object/public/pet-images/buildtest/ping.txt" \
+    || { echo "The local file server did not start:"; cat /tmp/media_server.log; exit 1; }
+/tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:$MEDIA_PORT >/tmp/tunnel.log 2>&1 &
 MEDIA_HOST=""
+SERVED=""
 for _ in $(seq 1 60); do
     MEDIA_HOST=$(grep -oE "[a-z0-9-]+\.trycloudflare\.com" /tmp/tunnel.log | head -1 || true)
-    [ -n "$MEDIA_HOST" ] && curl -sf -o /dev/null "https://$MEDIA_HOST/storage/v1/object/public/pet-images/buildtest/ping.txt" && break
+    if [ -n "$MEDIA_HOST" ] && [ "$(curl -s "https://$MEDIA_HOST/storage/v1/object/public/pet-images/buildtest/ping.txt")" = "ok" ]; then
+        SERVED=yes; break
+    fi
     sleep 2
 done
-[ -n "$MEDIA_HOST" ] || { echo "The temporary link did not start:"; tail -20 /tmp/tunnel.log; exit 1; }
+[ -n "$SERVED" ] || { echo "The temporary link does not serve the test files:"; tail -20 /tmp/tunnel.log; exit 1; }
 echo "files at https://$MEDIA_HOST/storage/v1/object/public/pet-images/buildtest/"
 export MEDIA_HOST
 

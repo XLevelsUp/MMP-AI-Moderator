@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 from app.jobs.queue import Delivery, JobQueue
 from app.jobs.results import DecisionStore, MediaMismatch, failure_fallback
-from app.ml.registry import load_models
+from app.ml.registry import load_models, registry
 from app.pipeline.context import ModerationContext
 from app.pipeline.orchestrator import finish, run_pipeline
 from app.validation.csam import get_csam_checker
@@ -182,6 +182,11 @@ def main() -> None:
     settings.temp_dir.mkdir(parents=True, exist_ok=True)
     get_csam_checker()  # logs a loud warning while the placeholder is in use
     load_models()  # before the loop starts: nothing else to do until they are ready
+    failed = {name: state for name, state in registry.status.items() if state != "ready"}
+    if failed and settings.environment == "production":
+        # Every job would end as check_incomplete: stop now so the problem is seen, jobs stay queued.
+        raise SystemExit("Refusing to start in production, models not loaded: "
+                         + "; ".join(f"{name} ({state})" for name, state in failed.items()))
     asyncio.run(serve())
 
 

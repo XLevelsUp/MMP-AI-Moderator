@@ -51,9 +51,10 @@ media:
   require_https: true
   connect_timeout_seconds: 5
   download_timeout_seconds: 60
-  # The worker reads the row's own file path and drops a job whose link is a different file.
-  # Needs migration 20261113100000_media_path_read (read access to the path columns).
-  check_row_path: true
+  # true = the worker reads the row's own file path and drops a job whose link is a different file.
+  # Off by decision (13 Nov 2026). Turning it on (CHECK_ROW_PATH=true) needs migration
+  # 20261113100000_media_path_read first, or every job fails.
+  check_row_path: false
 
 # Uploads wait here for a GPU worker (python -m app.worker).
 queue:
