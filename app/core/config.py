@@ -69,6 +69,7 @@ class MediaSettings(StrictModel):
     require_https: bool
     connect_timeout_seconds: float = Field(gt=0)
     download_timeout_seconds: float = Field(gt=0)
+    check_row_path: bool   # the worker checks a link is the file of the row it was sent for
 
 
 class QueueSettings(StrictModel):
@@ -99,6 +100,21 @@ class MetadataSettings(StrictModel):
 
 class LoggingSettings(StrictModel):
     level: str
+    format: Literal["text", "json"] = "text"   # json in production: one JSON object per line
+
+
+class ApiSettings(StrictModel):
+    # Callers send one of these in key_header. Set API_KEYS (comma-separated) in the environment,
+    # never in this file. Empty = no key needed, which production refuses at startup.
+    keys: list[str]
+    key_header: str
+
+
+class WorkerSettings(StrictModel):
+    exit_when_empty: bool                         # part-time GPU: stop once nothing is left to do
+    idle_exit_seconds: float = Field(gt=0)        # how long the queue must stay empty first
+    heartbeat_key: str                            # Redis key prefix; /health/ready counts live workers
+    heartbeat_ttl_seconds: int = Field(ge=5)
 
 
 class SafetySettings(StrictModel):
@@ -131,6 +147,7 @@ class PrepareSettings(StrictModel):
     max_video_frames: int = Field(ge=3)
     ffmpeg_hwaccel: str  # "none", "cuda" (NVIDIA: decode + resize on the GPU), "auto", "d3d11va", "qsv"
     decode_pieces: int = Field(ge=1)  # cuda only: video stretches decoded at the same time
+    min_frame_coverage: float = Field(gt=0, le=1)  # fewer decoded frames than this share = broken video
 
 class ModelSettings(StrictModel):
     repo: str          # Hugging Face repo, e.g. google/siglip2-base-patch16-384
@@ -514,6 +531,9 @@ class AiLabelSettings(StrictModel):
 
 
 class AppSettings(StrictModel):
+    environment: Literal["development", "production"]
+    api: ApiSettings
+    worker: WorkerSettings
     limits: LimitsSettings
     allowed_formats: FormatsSettings
     timeouts: TimeoutsSettings
@@ -578,6 +598,24 @@ def load_settings(path: Path = CONFIG_FILE) -> AppSettings:
     data["prepare"]["ffmpeg_hwaccel"] = os.getenv("FFMPEG_HWACCEL", data["prepare"]["ffmpeg_hwaccel"])
     # The guard model (~8 GB) is off on the laptop and switched on for GPU runs: GUARD_MODEL=shieldstral
     data["ml"]["guard_model"] = os.getenv("GUARD_MODEL", data["ml"]["guard_model"]) or None
+    # Production build (12 Nov 2026)
+    data["environment"] = os.getenv("APP_ENV", data["environment"])
+    keys = os.getenv("API_KEYS")
+    if keys is not None:
+        data["api"]["keys"] = [key.strip() for key in keys.split(",") if key.strip()]
+    data["logging"]["level"] = os.getenv("LOG_LEVEL", data["logging"]["level"])
+    data["logging"]["format"] = os.getenv("LOG_FORMAT", data["logging"]["format"])
+    data["worker"]["exit_when_empty"] = (
+        os.getenv("WORKER_EXIT_WHEN_EMPTY", str(data["worker"]["exit_when_empty"])).lower() == "true")
+    temp = os.getenv("TEMP_DIR")
+    if temp:
+        data["temp_dir"] = temp
+    quarantine = os.getenv("QUARANTINE_DIR")  # same: the laptop's D:\ path is no use on a server
+    if quarantine:
+        data["safety"]["quarantine_dir"] = quarantine
+    ocr_dir = os.getenv("EASYOCR_MODEL_DIR")  # the laptop's D:\ path is no use on a server
+    if ocr_dir:
+        data["gate2"]["text"]["ocr"]["model_dir"] = ocr_dir
 
 
     return AppSettings.model_validate(data)

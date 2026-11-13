@@ -1,0 +1,43 @@
+# The always-on server (t3.small): the API and Redis.
+#
+#   cd /opt/mmp && docker compose -f deploy/docker-compose.api.yml --env-file /opt/mmp/api.env up -d
+#
+# Redis is reachable only from inside this server and the VPC (the GPU worker); never open
+# port 6379 to the internet. See docs/DEPLOY.md.
+services:
+  redis:
+    image: redis:7.4-alpine
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    ports:
+      # The GPU worker connects here. Bind to the server's private VPC address only:
+      # set REDIS_BIND_IP in api.env (for example 10.0.1.25).
+      - "${REDIS_BIND_IP:?set REDIS_BIND_IP to this server's private IP}:6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    entrypoint: ["sh", "-c", "exec redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
+
+  api:
+    image: ${API_IMAGE:-mmp-moderation-api:latest}
+    env_file: /opt/mmp/api.env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+volumes:
+  redis-data:

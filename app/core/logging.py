@@ -1,4 +1,6 @@
+import json
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.api.schemas import ModerationResponse
@@ -8,11 +10,30 @@ from app.core.config import settings
 logger = logging.getLogger("mmp.moderation")
 
 
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line, for CloudWatch and other log tools."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "time": datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="milliseconds"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            entry["error"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=False)
+
+
 def setup_logging() -> None:
-    logging.basicConfig(
-        level=settings.logging.level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    handler = logging.StreamHandler()
+    if settings.logging.format == "json":
+        handler.setFormatter(JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(settings.logging.level)
 
 
 def log_result(

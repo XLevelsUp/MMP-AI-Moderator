@@ -134,6 +134,11 @@ def prepare_video(path: Path, duration: float, width: int = 0, height: int = 0) 
             frames = decode(path, duration, times, None, 1)
     else:
         frames = decode(path, duration, times, None, 1)  # CPU pieces gained nothing on 2 cores
+    if len(frames) < len(times) * p.min_frame_coverage:
+        # The header promises more video than decodes: truncated or damaged, and the missing
+        # part would go unchecked.
+        logger.warning("%s decoded %d of %d frames", path.name, len(frames), len(times))
+        raise ValidationFailure("corrupt_file")
 
     prepared = []
     for png, time in frames:

@@ -45,6 +45,8 @@ class IdempotencyStore:
         return ModerationResponse.model_validate_json(raw)
 
     async def store(self, key: UploadKey, response: ModerationResponse) -> None:
+        if any(flag.endswith("_unavailable") for flag in response.flags):
+            return  # a model was missing: not a real answer, so don't serve it again for 30 days
         await self.redis.set(
             result_key(key),
             response.model_dump_json(),

@@ -1,12 +1,12 @@
 from time import perf_counter, time
 from typing import Annotated
-from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from redis.exceptions import RedisError
 
+from app.api.security import require_api_key
 from app.api.schemas import ContentContext, ContentType, ModerationRequest, ModerationResponse
 from app.cache.idempotency import IdempotencyStore, UploadKey, get_idempotency_store
 from app.core.config import settings
@@ -17,7 +17,7 @@ from app.pipeline.context import ModerationContext
 from app.pipeline.orchestrator import finish, run_pipeline
 from app.validation.csam import CsamCheckError
 from app.validation.errors import ProcessingTimeout, ValidationFailure
-from app.validation.intake import remove_temp_file, save_upload
+from app.validation.intake import allowed_link, remove_temp_file, save_upload
 
 
 router = APIRouter()
@@ -27,22 +27,11 @@ def get_job_queue(store: Annotated[IdempotencyStore, Depends(get_idempotency_sto
     return JobQueue(store.redis)
 
 
-def allowed_link(url: str) -> bool:
-    """Only the app's own storage: the service must never fetch an address a caller picks."""
-    try:
-        parts = urlsplit(url)
-        host = parts.hostname
-    except ValueError:
-        return False
-    media = settings.media
-    scheme_ok = parts.scheme == "https" or (not media.require_https and parts.scheme == "http")
-    return scheme_ok and host is not None and host.lower() in media.allowed_hosts
-
-
 @router.post(
     "/api/v1/moderate",
     status_code=202,
     response_class=Response,
+    dependencies=[Depends(require_api_key)],
 )
 async def moderate_content(request: ModerationRequest, queue: Annotated[JobQueue, Depends(get_job_queue)]):
     """Accept the upload and answer at once, with no data. A worker checks it and writes to the database."""
@@ -73,6 +62,7 @@ async def moderate_content(request: ModerationRequest, queue: Annotated[JobQueue
 @router.post(
     "/api/v1/moderate/upload",
     response_model=ModerationResponse,
+    dependencies=[Depends(require_api_key)],
 )
 async def moderate_upload(
     file: Annotated[UploadFile, File()],

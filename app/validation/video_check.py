@@ -138,8 +138,12 @@ def check_video(path: Path, file_format: str) -> VideoInfo:
     video = video_streams[0]
 
     duration = parse_duration(info, video)
-    if duration is None:
-        duration = measured_duration(path)
+    if duration is None or not {"matroska", "webm"}.isdisjoint(format_names):
+        # A WebM / Matroska header can be missing or claim less than the file holds, which would
+        # get past the length limit and leave the rest unchecked: measure the packets instead.
+        measured = measured_duration(path)
+        if measured is not None:
+            duration = measured if duration is None else max(duration, measured)
     if duration is None:
         raise ValidationFailure("corrupt_file")
 

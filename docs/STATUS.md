@@ -1,11 +1,12 @@
 # MeetMyPets AI Moderation — POC status
 
-**As of 30 Oct 2026 · code `gate2-0.19.2` / `gate1-fused-0.7.1` · 497 tests passing**
+**As of 12 Nov 2026 · code `gate2-0.19.2` / `gate1-fused-0.7.1` · 621 tests passing**
 
 The moderation logic is close to its first production version: every upload goes through
 validation, Gate 1 (is there a pet?) and Gate 2 (is it safe and suitable?), and gets
-APPROVED, HUMAN_REVIEW or REJECTED with scores, flags and a reason code. What is not built
-yet is the service around it (deployment, review queue, monitoring) — see
+APPROVED, HUMAN_REVIEW or REJECTED with scores, flags and a reason code. The production build
+(Docker images, security, health checks, the part-time GPU) is in
+[Production build](#production-build-12-nov-2026); what is still missing is in
 [Not built yet](#not-built-yet).
 
 ## What a request goes through
@@ -123,14 +124,32 @@ the test page uses `POST /api/v1/moderate/upload`, which answers in the same req
 
 Switches: `GUARD_MODEL` (Shieldstral on / off), `ML_DEVICE`, `ML_DTYPE`, `FFMPEG_HWACCEL`.
 
+## Production build (12 Nov 2026)
+
+How to deploy: [docs/DEPLOY.md](DEPLOY.md). Built:
+
+| Item | Where |
+|---|---|
+| Two Docker images: `api` (no GPU, no models) and `worker` (CUDA 12.6 PyTorch, ffmpeg; models mounted from disk) | `deploy/Dockerfile` |
+| API key on `POST /api/v1/moderate` (`X-API-Key`, `API_KEYS`) | `app/api/security.py` |
+| Production start-up checks: refuses to start without keys, allowed hosts or a database | `app/api/security.py` |
+| Media links only from allowed hosts under `/storage/v1/object/`, checked by the API and again by the worker | `app/validation/intake.py` |
+| The worker checks a link is the row's own file before writing; a mismatch is dropped and logged | `app/jobs/results.py`, migration `20261113100000_media_path_read` |
+| `/health/live`, `/health/ready` (Redis, queue length, workers running), JSON logs | `app/main.py`, `app/core/logging.py` |
+| Part-time GPU: `--exit-when-empty`, worker heartbeat; the server shuts itself down after the queue is empty | `app/worker.py`, `deploy/run-worker.sh`, `deploy/mmp-worker.service` |
+| Redis that keeps waiting jobs over a restart (append-only log), password, VPC-only | `deploy/redis.conf`, `deploy/docker-compose.api.yml` |
+| Database migrations in the repo | `db/migrations/` |
+| Audit fixes: a bad queue entry no longer stops the worker; answers made with a missing model aren't cached; out-of-memory isn't called a bad file; WebM length measured, not trusted; truncated videos rejected | `app/jobs/queue.py`, `app/cache/idempotency.py`, `app/validation/`, `app/prepare/video.py` |
+
+The admin panel and its review form are built by the admin developers on the database; see the handoff doc.
+
 ## Not built yet
 
 | Item | Why it is needed |
 |---|---|
-| Dockerfile, production settings (GPU, Shieldstral on), `/health/live` + `/health/ready`, JSON logs, `/metrics`, decoder warm-up | DevOps cannot run it without these |
+| `/metrics`, decoder warm-up | monitoring and the first video's speed |
 | Batching across requests in the GPU workers | the queue is built; this is what raises throughput toward 50 photos per second |
 | Background workers for the AI label and speech-to-text | speed; they never change the decision |
-| Review queue + moderator correction form (`moderation` schema in the existing database) | every review / rejection must reach a person; their corrections are the training data |
 | Speed test on an L4, video tuning to < 15 s | spec target |
 | Catch-rate test on trust-and-safety examples, then `act_from` thresholds | spec recall targets |
 | Shadow mode, then live | prove agreement with moderators before auto-approval |

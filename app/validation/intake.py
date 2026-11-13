@@ -1,6 +1,7 @@
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -8,6 +9,9 @@ from fastapi import UploadFile
 
 from app.core.config import settings
 from app.validation.errors import ValidationFailure
+
+# Supabase Storage objects: /storage/v1/object/public/<bucket>/... or /storage/v1/object/sign/...
+STORAGE_PATH = "/storage/v1/object/"
 
 
 @dataclass
@@ -60,8 +64,23 @@ class DownloadError(Exception):
     """The link didn't deliver the file. Not a decision: the job is retried."""
 
 
+def allowed_link(url: str) -> bool:
+    """Only the app's own storage: the service must never fetch an address a caller picks."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return False
+    media = settings.media
+    scheme_ok = parts.scheme == "https" or (not media.require_https and parts.scheme == "http")
+    return (scheme_ok and host is not None and host.lower() in media.allowed_hosts
+            and parts.path.startswith(STORAGE_PATH))
+
+
 async def download_media(url: str, content_type: str, path: Path, transport=None) -> IntakeResult:
     """Stream the app's file to disk, hashing and counting as we go; stop as soon as it is too big."""
+    if not allowed_link(url):  # checked by the API too; a job in Redis is not trusted blindly
+        raise DownloadError("media link is not on an allowed host")
     m = settings.media
     limit = max_bytes_for(content_type)
     digest = hashlib.sha256()

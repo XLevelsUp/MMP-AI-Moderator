@@ -83,6 +83,27 @@ insert into moderation.decisions (
 ) on conflict (id) do nothing
 """  # a job retried after a crash mustn't write a second record
 
+# The file each row points to, to check the job's link belongs to that row.
+ROW_PATH = {
+    "pet_media": "select storage_path from pets.pet_media where id = %(id)s",
+    "post_media": "select storage_path from social.post_media where id = %(id)s",
+    "pet_profile_photo": "select profile_photo_path from pets.pets where id = %(id)s",
+}
+
+
+class MediaMismatch(Exception):
+    """The link is not this row's file: someone sent another file's link with this row's id."""
+
+
+def paths_match(link_path: str, row_path: str | None) -> bool:
+    """The link's 'bucket/path' must be the row's path, which is stored with or without the bucket.
+    A row with no path recorded can't be compared, so it passes."""
+    if not row_path:
+        return True
+    link_path, row_path = link_path.strip("/"), unquote(row_path).strip("/")
+    return link_path == row_path or link_path.endswith("/" + row_path)
+
+
 UPDATE_PET_MEDIA = """
 update pets.pet_media set moderation_status = %(status)s, moderation_rejection_code = %(code)s where id = %(id)s
 """
@@ -115,7 +136,10 @@ class DecisionStore:
     def __init__(self, url: str):
         self.url = url
 
-    def save(self, job: Job, response: ModerationResponse, sha256: str | None, size_bytes: int | None) -> None:
+    def save(self, job: Job, response: ModerationResponse, sha256: str | None, size_bytes: int | None,
+             *, check_path: bool = True) -> None:
+        """check_path=False only when giving up on a job: no content was judged, so only the
+        status goes to in_review, and a missing grant or path must not block that forever."""
         outcome = outcome_for(response)  # the breed check is recorded only: it plays no part here
         breed = response.breed_check
         scores = response.dimension_scores.model_dump() if response.dimension_scores else None
@@ -139,6 +163,11 @@ class DecisionStore:
         }
         target = {"status": outcome.moderation_status, "code": outcome.rejection_code, "id": job.media_id}
         with psycopg.connect(self.url, connect_timeout=settings.database.connect_timeout_seconds) as db:
+            if check_path and settings.media.check_row_path:
+                found_row = db.execute(ROW_PATH[job.media_type], {"id": job.media_id}).fetchone()
+                if found_row and not paths_match(row["storage_path"], found_row[0]):
+                    raise MediaMismatch(f"{job.media_type} {job.media_id} is {found_row[0]!r}, "
+                                        f"the link is {row['storage_path']!r}")
             db.execute(INSERT_DECISION, row)
             if job.media_type == "pet_media":
                 found = db.execute(UPDATE_PET_MEDIA, target).rowcount

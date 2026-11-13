@@ -3,12 +3,16 @@
 A job stays in the stream until a worker has written its result to the database, so a worker
 that dies loses nothing: another worker takes the job over.
 """
-from dataclasses import asdict, dataclass
+import logging
+from dataclasses import asdict, dataclass, fields
 
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from app.core.config import settings
+
+
+logger = logging.getLogger("mmp.queue")
 
 
 class QueueFull(Exception):
@@ -43,9 +47,21 @@ def stream_for(content_type: str) -> str:
     return q.video_stream if content_type == "video" else q.image_stream
 
 
-def job_from(fields: dict) -> Job:
-    values = {k.decode(): v.decode() for k, v in fields.items()}
-    return Job(**{**values, "queued_at": float(values["queued_at"])})
+JOB_FIELDS = {f.name for f in fields(Job)}
+
+
+class BadJob(Exception):
+    """A stream entry that isn't a valid job: written by an older or newer API, or by hand."""
+
+
+def job_from(raw: dict) -> Job:
+    """Unknown fields are ignored (a newer API may add some); a missing one is a BadJob."""
+    values = {decoded(k): decoded(v) for k, v in raw.items()}
+    try:
+        values = {k: v for k, v in values.items() if k in JOB_FIELDS}
+        return Job(**{**values, "queued_at": float(values["queued_at"])})
+    except (KeyError, TypeError, ValueError) as exc:
+        raise BadJob(f"not a valid job: {exc}") from exc
 
 
 def decoded(value) -> str:
@@ -78,11 +94,35 @@ class JobQueue:
         q = settings.queue
         streams = [q.video_stream, q.image_stream] if video_first else [q.image_stream, q.video_stream]
         for stream in streams:
-            found = await self.redis.xreadgroup(q.group, consumer, {stream: ">"}, count=1)
-            for _, messages in found:
-                for message_id, fields in messages:
-                    return Delivery(stream, decoded(message_id), job_from(fields))
+            while True:  # a bad entry is dropped and the next one read
+                found = await self.redis.xreadgroup(q.group, consumer, {stream: ">"}, count=1)
+                messages = [m for _, batch in found for m in batch]
+                if not messages:
+                    break
+                message_id, raw = messages[0]
+                try:
+                    return Delivery(stream, decoded(message_id), job_from(raw))
+                except BadJob as exc:
+                    await self.drop(stream, decoded(message_id), exc)
         return None
+
+    async def drop(self, stream: str, message_id: str, reason: Exception) -> None:
+        """A bad entry would be retried forever: log it and take it out of the stream."""
+        logger.error("dropped queue entry %s from %s: %s", message_id, stream, reason)
+        await self.redis.xack(stream, settings.queue.group, message_id)
+        await self.redis.xdel(stream, message_id)
+
+    async def pending(self) -> int:
+        """Jobs handed to a worker but not finished: in progress, or left behind by a dead worker."""
+        q = settings.queue
+        total = 0
+        for stream in (q.image_stream, q.video_stream):
+            try:
+                summary = await self.redis.xpending(stream, q.group)
+            except ResponseError:  # no group yet: nothing pending
+                continue
+            total += summary["pending"] if isinstance(summary, dict) else summary[0]
+        return total
 
     async def reclaim(self, consumer: str) -> list[tuple[Delivery, int]]:
         """Jobs a dead worker left behind, each with how many times it has been handed out."""
@@ -92,12 +132,17 @@ class JobQueue:
             claimed = await self.redis.xautoclaim(
                 stream, q.group, consumer, min_idle_time=q.reclaim_idle_seconds * 1000, count=q.reclaim_batch,
             )
-            for message_id, fields in claimed[1]:
-                if not fields:  # removed from the stream while it was waiting
+            for message_id, raw in claimed[1]:
+                if not raw:  # removed from the stream while it was waiting
+                    continue
+                try:
+                    job = job_from(raw)
+                except BadJob as exc:
+                    await self.drop(stream, decoded(message_id), exc)
                     continue
                 pending = await self.redis.xpending_range(stream, q.group, message_id, message_id, 1)
                 attempts = pending[0]["times_delivered"] if pending else 1
-                taken.append((Delivery(stream, decoded(message_id), job_from(fields)), attempts))
+                taken.append((Delivery(stream, decoded(message_id), job), attempts))
         return taken
 
     async def remove(self, delivery: Delivery) -> None:

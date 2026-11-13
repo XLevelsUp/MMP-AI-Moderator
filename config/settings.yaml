@@ -51,6 +51,9 @@ media:
   require_https: true
   connect_timeout_seconds: 5
   download_timeout_seconds: 60
+  # The worker reads the row's own file path and drops a job whose link is a different file.
+  # Needs migration 20261113100000_media_path_read (read access to the path columns).
+  check_row_path: true
 
 # Uploads wait here for a GPU worker (python -m app.worker).
 queue:
@@ -92,7 +95,23 @@ metadata:
     - runway
 
 logging:
-  level: INFO
+  level: INFO            # LOG_LEVEL
+  format: text           # LOG_FORMAT=json in production: one JSON object per line
+
+# development or production (APP_ENV). Production refuses to start without API keys.
+environment: development
+
+# POST /api/v1/moderate needs one of these keys in the header below. Set API_KEYS
+# (comma-separated) in the environment; never write a key in this file.
+api:
+  keys: []
+  key_header: X-API-Key
+
+worker:
+  exit_when_empty: false     # WORKER_EXIT_WHEN_EMPTY=true on the part-time GPU: stop when the queue is empty
+  idle_exit_seconds: 60      # the queue must stay empty this long, with no job a dead worker left behind
+  heartbeat_key: "mod:worker:"
+  heartbeat_ttl_seconds: 30
 
 redis:
   url: redis://127.0.0.1:6379/0
@@ -136,6 +155,7 @@ prepare:
   # sets it with FFMPEG_HWACCEL=cuda (no NVIDIA GPU on the laptop).
   ffmpeg_hwaccel: none
   decode_pieces: 2            # cuda: the T4 has 2 hardware decoders -> 2 pieces 3.6 s, 4 pieces 4.3 s
+  min_frame_coverage: 0.5     # a video that decodes fewer than half its frames is broken or truncated
 
 ml:
   device: cpu        # cpu on this laptop; cuda for the cloud NVIDIA run (Step 16b)

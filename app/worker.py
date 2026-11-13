@@ -1,6 +1,7 @@
 """GPU worker: holds the models, takes uploads from the queue one at a time, updates the database.
 
     uv run python -m app.worker
+    uv run python -m app.worker --exit-when-empty   # part-time GPU: stop once the queue is empty
 
 Run one per GPU. Each loads all the models, so several on one GPU need several times the memory.
 The API and the workers must share Redis and the same settings and environment.
@@ -9,17 +10,19 @@ import asyncio
 import logging
 import os
 import socket
+import sys
 from pathlib import Path
 from time import perf_counter, time
 from uuid import UUID
 
 from redis.exceptions import RedisError
 
+from app.api.security import check_production
 from app.cache.idempotency import IdempotencyStore, UploadKey, make_redis
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.jobs.queue import Delivery, JobQueue
-from app.jobs.results import DecisionStore, failure_fallback
+from app.jobs.results import DecisionStore, MediaMismatch, failure_fallback
 from app.ml.registry import load_models
 from app.pipeline.context import ModerationContext
 from app.pipeline.orchestrator import finish, run_pipeline
@@ -79,6 +82,10 @@ class Worker:
                 response = failure_fallback(response)
             await asyncio.to_thread(self.decisions.save, job, response, sha256, size)
             await self.queue.remove(delivery)
+        except MediaMismatch as exc:
+            # Never retried and nothing written: the row keeps its status, the log says why.
+            logger.error("job %s dropped: the link is not this row's file: %s", job.content_id, exc)
+            await self.queue.remove(delivery)
         except Exception:
             logger.exception("job %s failed, will be retried", job.content_id)
         finally:
@@ -90,7 +97,7 @@ class Worker:
         ctx = self.context_for(delivery)
         ctx.flags.append("check_incomplete")
         response = failure_fallback(ctx.to_response())
-        await asyncio.to_thread(self.decisions.save, delivery.job, response, None, 0)
+        await asyncio.to_thread(lambda: self.decisions.save(delivery.job, response, None, 0, check_path=False))
         await self.queue.remove(delivery)
 
     async def reclaim(self) -> None:
@@ -119,13 +126,40 @@ class Worker:
         await self.process(delivery)
         return True
 
+    async def heartbeat(self) -> None:
+        """Lets /health/ready count running workers. Expires on its own if the worker dies."""
+        w = settings.worker
+        await self.queue.redis.set(f"{w.heartbeat_key}{self.consumer}", str(time()), ex=w.heartbeat_ttl_seconds)
+
+    async def finished(self, idle_since: float | None) -> bool:
+        """Drain mode: stop once the queue has been empty for idle_exit_seconds with nothing in
+        progress. A job left by a dead worker counts as in progress until it is reclaimed."""
+        if idle_since is None or time() - idle_since < settings.worker.idle_exit_seconds:
+            return False
+        return await self.queue.pending() == 0
+
     async def run(self) -> None:
         await self.queue.ensure_groups()
-        logger.info("worker %s ready", self.consumer)
+        drain = settings.worker.exit_when_empty
+        logger.info("worker %s ready%s", self.consumer, ", will stop when the queue is empty" if drain else "")
+        idle_since = None
+        last_beat = 0.0
+        done = 0
         while True:
             try:
-                if not await self.step():
-                    await asyncio.sleep(settings.queue.poll_seconds)
+                if time() - last_beat >= settings.worker.heartbeat_ttl_seconds / 3:
+                    await self.heartbeat()
+                    last_beat = time()
+                if await self.step():
+                    done += 1
+                    idle_since = None
+                    continue
+                idle_since = idle_since or time()
+                if drain and await self.finished(idle_since):
+                    logger.info("worker %s: queue empty, stopping after %d jobs", self.consumer, done)
+                    await self.queue.redis.delete(f"{settings.worker.heartbeat_key}{self.consumer}")
+                    return
+                await asyncio.sleep(settings.queue.poll_seconds)
             except RedisError as exc:
                 logger.error("redis unavailable, retrying: %s", exc)
                 await asyncio.sleep(settings.queue.redis_retry_seconds)
@@ -140,6 +174,9 @@ async def serve() -> None:
 
 def main() -> None:
     setup_logging()
+    if "--exit-when-empty" in sys.argv[1:]:
+        settings.worker.exit_when_empty = True
+    check_production(worker=True)
     if not settings.database.url:
         raise SystemExit("DATABASE_URL is not set: the worker has nowhere to write its results.")
     settings.temp_dir.mkdir(parents=True, exist_ok=True)

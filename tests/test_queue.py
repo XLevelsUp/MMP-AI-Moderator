@@ -42,7 +42,7 @@ class FakeDecisions:
         self.saved = []
         self.fail = fail
 
-    def save(self, job, response, sha256, size_bytes):
+    def save(self, job, response, sha256, size_bytes, *, check_path=True):
         if self.fail:
             raise RuntimeError("database down")
         self.saved.append(SimpleNamespace(job=job, response=response, sha256=sha256, size=size_bytes))

@@ -68,8 +68,8 @@ def check_image(path: Path) -> ImageInfo:
                     img.load()
                     duration += frame_seconds(img)
 
-    except ValidationFailure:
-        raise
+    except (ValidationFailure, MemoryError):
+        raise  # out of memory is the server's problem: retried, never called a bad file
     except Image.DecompressionBombError:
         raise ValidationFailure("image_too_large_pixels")
     except Exception:

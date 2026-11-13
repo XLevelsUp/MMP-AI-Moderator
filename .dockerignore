@@ -1,0 +1,18 @@
+# Only app/, config/, scripts/download_models.py, models/gate1_head.npz, pyproject.toml and uv.lock
+# go into the images. Everything else stays out, above all secrets and test data.
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+!.env.example
+data/
+docs/
+tests/
+deploy/*.env
+*.zip
+*.pdf
+models/*
+!models/gate1_head.npz
