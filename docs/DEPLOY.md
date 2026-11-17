@@ -1,6 +1,6 @@
 # Deploying the AI moderation service
 
-Two servers in AWS Seoul (`ap-northeast-2`, the same region as the Supabase database): an always-on `t3.small` for the API and the Redis queue,
+Two servers in AWS Mumbai (`ap-south-1`, the same region as the production Supabase database; staging is in Seoul, which works from Mumbai, just a little slower): an always-on `t3.small` for the API and the Redis queue,
 and a `g4dn.xlarge` GPU server that starts once a day, clears the queue and shuts itself down.
 Results go straight into the Supabase database.
 
@@ -33,7 +33,7 @@ Later, split it into the two-server setup below to save cost.
 
 | Item | Where |
 | --- | --- |
-| GPU quota: "Running On-Demand G and VT instances", at least 4 vCPUs in `ap-northeast-2` | AWS Service Quotas. Request it first: approval can take days |
+| GPU quota: "Running On-Demand G and VT instances", at least 4 vCPUs in `ap-south-1` | AWS Service Quotas. Request it first: approval can take days |
 | A domain name for the API, such as `moderation.example.com` | Your DNS provider |
 | The database migrations run on the target database | Section 2 |
 | A password for the `moderation_service` role | Section 2 |
@@ -75,10 +75,10 @@ docker build -f deploy/Dockerfile --target worker -t mmp-moderation-worker:1.0 .
 Push both to Amazon ECR (create two repositories named `mmp-moderation-api` and `mmp-moderation-worker` first):
 
 ```bash
-aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin <account>.dkr.ecr.ap-northeast-2.amazonaws.com
+aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin <account>.dkr.ecr.ap-south-1.amazonaws.com
 for name in api worker; do
-  docker tag mmp-moderation-$name:1.0 <account>.dkr.ecr.ap-northeast-2.amazonaws.com/mmp-moderation-$name:1.0
-  docker push <account>.dkr.ecr.ap-northeast-2.amazonaws.com/mmp-moderation-$name:1.0
+  docker tag mmp-moderation-$name:1.0 <account>.dkr.ecr.ap-south-1.amazonaws.com/mmp-moderation-$name:1.0
+  docker push <account>.dkr.ecr.ap-south-1.amazonaws.com/mmp-moderation-$name:1.0
 done
 ```
 
@@ -116,7 +116,7 @@ The worker needs outbound access to Redis and to Supabase (database and storage)
 
    ```bash
    cd /opt/mmp/deploy
-   API_IMAGE=<account>.dkr.ecr.ap-northeast-2.amazonaws.com/mmp-moderation-api:1.0 \
+   API_IMAGE=<account>.dkr.ecr.ap-south-1.amazonaws.com/mmp-moderation-api:1.0 \
      docker compose -f docker-compose.api.yml --env-file /opt/mmp/api.env up -d
    curl -s localhost:8000/health/ready
    ```
