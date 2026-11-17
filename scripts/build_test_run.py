@@ -208,6 +208,30 @@ def run() -> None:
     images = [rows[f["media_id"]][5] for f in staged if f["content_type"] == "image" and f["media_id"] in rows and f["group"] != "bad"]
     videos = [rows[f["media_id"]][5] for f in staged if f["content_type"] == "video" and f["media_id"] in rows and f["group"] != "bad"]
 
+    # --- where the time went: one line per upload, slowest first (stages from the worker's own log)
+    by_id = {}
+    for line in log.splitlines():
+        if not line.startswith("{"):
+            continue
+        msg = json.loads(line).get("message", "")
+        if "timings_ms=" in msg and "content_id=" in msg:
+            cid = msg.split("content_id=", 1)[1].split()[0]
+            total_ms = int(msg.split(" ms=", 1)[1].split()[0])
+            stages = dict(s.rsplit(":", 1) for s in msg.split("timings_ms=", 1)[1].split(",") if ":" in s)
+            by_id[cid] = (total_ms, {k: int(v) for k, v in stages.items()})
+    # the log has the API's content_id, the rows have media_id: matched by the saved processing time
+    name_of = {rows[f["media_id"]][5]: f"{f['name']} ({f['content_type']})" for f in staged if f["media_id"] in rows}
+    print("\n== where the time went (ms; total includes the download, slowest first)")
+    for cid, (total_ms, stages) in sorted(by_id.items(), key=lambda x: -x[1][0])[:12]:
+        top = ", ".join(f"{k} {v}" for k, v in sorted(stages.items(), key=lambda x: -x[1])[:6])
+        print(f"{name_of.get(total_ms, cid[:8]):<22} total {total_ms:>7} | {top}")
+    warnings = [json.loads(line).get("message", "")[:200] for line in log.splitlines() if line.startswith("{")
+                and any(w in line for w in ("decode failed", "CPU instead", "retried", "will be retried",
+                                            "out of memory", "OutOfMemory", "CUDA error"))]
+    print(f"\n== warnings in the worker log: {len(warnings)}")
+    for w in warnings[:15]:
+        print("  ", w)
+
     processed = [r for r in rows.values() if r[5] > 0]
     check("uploads really processed by the models", len(processed) >= len(staged) - 1,
           f"{len(processed)} of {len(staged)} have a processing time")

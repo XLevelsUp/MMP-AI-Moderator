@@ -15,3 +15,7 @@ __pycache__/
 .env
 # Generated test files (scripts/make_fixtures.py); iphone.heic may hold personal data
 tests/fixtures/
+
+# Server settings files (filled-in copies of deploy/*.env.example)
+api.env
+worker.env

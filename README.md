@@ -1,79 +1,119 @@
-# MeetMyPets AI Moderation — POC
+# MeetMyPets AI Moderation Service
 
-`POST /api/v1/moderate`: validation, Gate 1 (is there a pet?) and Gate 2 (is it safe and
-suitable?) for images and videos, all models self-hosted. **What is built, the measured
-results, known limitations and what is still missing: [docs/STATUS.md](docs/STATUS.md).**
+Checks every photo and video uploaded to MeetMyPets and writes the result straight into the app's
+Supabase database. Two questions per upload:
 
-## Setup (once)
+- **Gate 1:** is there a real pet in it?
+- **Gate 2:** is it safe and suitable (animal welfare, nudity, violence, prohibited items, quality)?
 
-1. `winget install --id=astral-sh.uv -e` and `setx UV_CACHE_DIR D:\uv-cache`
-2. `uv python install 3.12`
-3. `winget install Gyan.FFmpeg`
-4. Docker Desktop (disk image location on D:)
-5. In the project folder: `uv sync`, then `copy .env.example .env`
+All models are self-hosted on our own GPU. No commercial moderation APIs are used.
 
-## Everyday commands
+- **What is built, measured results, known gaps:** [docs/STATUS.md](docs/STATUS.md)
+- **Request format for the app backend:** [docs/API.md](docs/API.md)
+- **Server setup:** [docs/DEPLOY.md](docs/DEPLOY.md)
+
+## How it works
+
+```
+App backend ──POST /api/v1/moderate──► API ──► Redis queue
+     ▲            (answers 202 at once)            │
+     │                                             ▼
+     └──── reads the result ◄── Supabase ◄── GPU worker (downloads the file, runs the models,
+                                Postgres       writes moderation.decisions + the media status)
+```
+
+1. The backend sends the file's **storage link** and the row it belongs to. The API checks the
+   API key and the link, puts a job in the queue and answers **202** with no body.
+2. A **worker** on the GPU takes jobs one at a time: downloads the file, validates it, runs
+   Gate 1 and Gate 2, and writes the decision.
+3. The result lands in `moderation.decisions`, and the media row's `moderation_status` becomes
+   `approved` or `in_review`. Everything not approved goes to the moderators' review queue
+   (`review_status = 'pending'`).
+
+| Decision | Media status | Review |
+| --- | --- | --- |
+| `APPROVED` | `approved` | `done` (no person needed) |
+| `REJECTED` / `HUMAN_REVIEW` | `in_review` | `pending`: a moderator confirms or corrects it |
+
+Rejection codes (one per rejection): `MOD_001` no pet · `MOD_002` animal welfare ·
+`MOD_003` animal fighting · `MOD_004` nudity · `MOD_005` violence · `MOD_006` prohibited items ·
+`MOD_007` low quality · `MOD_008` bad or unreadable file · `MOD_009` animal trafficking.
+
+## Repository layout
+
+| Folder | What is in it |
+| --- | --- |
+| `app/api` | FastAPI routes, request/response schemas, API-key check, production start-up guard |
+| `app/validation` | Download, file checks (format, size, length), CSAM check (placeholder) |
+| `app/prepare` | Turning images and videos into frames (GPU video decoding with ffmpeg) |
+| `app/gates` | Gate 1 (pet) and Gate 2 (safety dimensions D1-D6) |
+| `app/ml` | Model loading and inference (SigLIP 2, OWLv2, BioCLIP 2, Shieldstral, NSFW, AI-image, audio, OCR) |
+| `app/pipeline` | Runs the stages for one upload |
+| `app/jobs` | Redis queue and writing results to the database |
+| `app/worker.py` | The GPU worker process |
+| `config/settings.yaml` | **Every threshold, limit and model version.** Nothing is hard-coded |
+| `db/migrations` | SQL for the `moderation` schema (with rollback files) |
+| `deploy` | Dockerfile, compose file, Redis config, worker start script, env templates |
+| `scripts` | Model download, benchmarks, evaluation, Colab test kit |
+| `tests` | pytest suite |
+
+## Local development
+
+Needs Python 3.12, [uv](https://docs.astral.sh/uv/) (never pip), ffmpeg and Docker (for Redis).
+
+```bash
+uv sync                          # install exactly what uv.lock pins
+cp .env.example .env             # local settings; never commit .env
+docker compose up -d             # Redis on localhost:6379
+uv run python -m scripts.download_models --models siglip2_base owlv2 bioclip2 nsfw_vit ai_smaug ast_audioset whisper_base
+uv run python -m scripts.download_models --ocr
+```
 
 | Task | Command |
-|---|---|
-| Start Redis | `docker compose up -d` |
+| --- | --- |
 | Run the API | `uv run uvicorn app.main:app --reload` |
-| Run a GPU worker (one per GPU, in a second terminal) | `uv run python -m app.worker` |
-| Run the API alone, no worker (for the test page) | `$env:QUEUE_ENABLED="false"; uv run uvicorn app.main:app --reload` |
-| Test page | `uvx --with httpx --with pandas --with pillow-heif streamlit run scripts/review_ui.py` |
-| Make test files | `uv run python -m scripts.make_fixtures` |
-| Run tests | `uv run pytest` |
-| Inspect one file | `uv run python -m scripts.inspect_file <path> image\|video` |
-| Blocklist | `uv run python -m scripts.blocklist add\|check\|remove\|count ...` |
+| Run a worker (second terminal) | `uv run python -m app.worker` |
+| Run the tests | `uv run pytest` |
+| Check one file by hand | `uv run python -m scripts.inspect_file <path> image\|video` |
 
-The test page runs through `uvx` in its own environment because Streamlit requires
-`pillow<13`, while the service uses Pillow 13. It expects an answer in the same request, so run
-the API with `QUEUE_ENABLED=false` for it; it uses `POST /api/v1/moderate/upload`.
+On a laptop without a GPU everything runs on the CPU (`ML_DEVICE=cpu`), slowly. Shieldstral
+(about 8 GB) is off by default there; set `GUARD_MODEL=shieldstral` on a machine with enough memory.
 
-`POST /api/v1/moderate` queues the file's link and answers 202 with no data. A worker checks it and updates the
-database, so it needs `DATABASE_URL` and the API needs `MEDIA_ALLOWED_HOSTS` (see `.env.example`).
-The API and the workers must use the same settings and environment (`GUARD_MODEL`, `ML_DTYPE`, ...). On a laptop, all the models plus Docker can run out of memory.
+## Production
 
-## Measured timings (Phase 1, validation only)
+Two Docker images from `deploy/Dockerfile`:
 
-Laptop: Intel i5-10210U, 16 GB RAM, no GPU · 3 runs per file · cache bypassed · <date>
+| Image | Target | Size | Runs |
+| --- | --- | --- | --- |
+| `mmp-moderation-api` | `api` | about 2.6 GB | The API (CPU only) |
+| `mmp-moderation-worker` | `worker` | about 12.6 GB | The GPU worker (CUDA 12.6). Models are **not** inside: they live in `/models` on the server |
 
-| Type | Files | Avg server time | Avg round trip | Notes |
-|---|---|---|---|---|
-| Image (phone JPEG) | … | … ms | … ms | |
-| Image (HEIC) | … | … ms | … ms | |
-| Image (screenshot PNG) | … | … ms | … ms | |
-| Video (phone MP4/MOV) | … | … ms | … ms | |
-| Rejected file (any) | … | … ms | … ms | fails fast |
-| Duplicate (cached) | … | … ms | … ms | answered from Redis |
+Settings come from environment files, one per program, so the internet-facing API never holds the
+database password:
 
-## SigLIP 2 benchmark (Step 16)
+| File | Template | Holds |
+| --- | --- | --- |
+| `api.env` | [deploy/api.env.example](deploy/api.env.example) | API keys, Redis password, allowed media host |
+| `worker.env` | [deploy/worker.env.example](deploy/worker.env.example) | Redis link, database login, allowed media host |
 
-Laptop: Intel i5-10210U (4 cores), 16 GB RAM, CPU-only PyTorch 2.14.1 · 20 Oct 2026 ·
-`uv run python -m scripts.bench_models` · end-to-end = validation + pre-processing + SigLIP.
-Spec targets: image < 3 s p95, 60 s video < 15 s p95.
+In production (`APP_ENV=production`) the API and the worker refuse to start if a required setting
+is missing or unsafe, and the worker refuses to start if any model failed to load. Health checks:
+`GET /health/live` and `GET /health/ready` (Redis, queue length, running workers).
 
-| | siglip2_base (`f775b65`) | siglip2_large / so400m (`dd658fa`) |
-|---|---|---|
-| Load time | 3.8 s | 12.1 s |
-| Memory (text half dropped) | +0.43 GB | +1.78 GB |
-| Embedding size | 768 | 1152 |
-| SigLIP per picture, 4 threads | ~0.8–0.9 s | ~3.5–4.2 s |
-| Image end-to-end p95, 4 threads | **1.10–1.35 s ✅** | **4.48 s ❌** |
-| 60 s 1080p video (61 frames), 4 threads | 60.8 s ❌ | 220 s ❌ |
+Full steps: [docs/DEPLOY.md](docs/DEPLOY.md).
 
-Thread scaling, siglip2_base, image end-to-end p95: 1 thread 1.92 s · 2 threads 1.34 s · 4 threads 1.10 s.
-Batching gives almost no gain on CPU.
+## Rules for this repository
 
-Provisional backbone: **siglip2_base** (only one under 3 s for images on this laptop).
-Video misses the 15 s target on CPU with either model; production-like speed is measured
-on a cloud NVIDIA GPU in Step 16b. Final model choice comes from accuracy on the labelled
-test set (Steps 20–22).
+- **Never commit secrets:** `.env`, `api.env`, `worker.env`, passwords, API keys, database links.
+- **Never commit `data/`** (test media and datasets) or model weights (except `models/gate1_head.npz`).
+- **Limits and thresholds go in `config/settings.yaml`**, not in code.
+- **Database changes go in `db/migrations`** with a rollback file, staging first.
+- **Use uv**, not pip.
+- Never download, store or use abusive, sexual or child-abuse material for testing or training.
 
-## Known limitations
+## Known limits
 
-- CSAM check is a placeholder (decision D-13); real PhotoDNA / Thorn is needed before production.
-- FastAPI receives the whole upload before the size check runs (buffered on D:, never in memory).
-- If Redis is down, requests get HTTP 503 ("try again"); nothing is moderated or cached.
-- A blocklisted image that was already uploaded keeps its cached answer for up to 30 days;
-  re-saved copies (new SHA-256) are caught.
+- The CSAM hash check is a placeholder until a provider is connected; the worker logs a warning.
+- One worker handles one file at a time: a photo takes about 1.5-3.5 s of GPU time on a T4.
+- Videos with a pet take about 35-40 s on a T4 (target 15 s); Shieldstral and video decoding are
+  the slow parts. Speed work is planned for the next version.

@@ -1,6 +1,6 @@
 # Deploying the AI moderation service
 
-Two servers in AWS Mumbai (`ap-south-1`): an always-on `t3.small` for the API and the Redis queue,
+Two servers in AWS Seoul (`ap-northeast-2`, the same region as the Supabase database): an always-on `t3.small` for the API and the Redis queue,
 and a `g4dn.xlarge` GPU server that starts once a day, clears the queue and shuts itself down.
 Results go straight into the Supabase database.
 
@@ -12,12 +12,28 @@ App backend ──HTTPS──► API (t3.small) ──► Redis queue (same serv
 ```
 
 Everything here was built and tested on 12 Nov 2026 except what is marked **not tested yet**.
+The full flow (API → queue → GPU worker → database) passed on a Colab T4 on 17 Nov 2026.
+
+**First deployment: one machine.** To start, everything can run on a single always-on
+`g4dn.xlarge`. Follow sections 2, 3, 5 and 6 on that one machine, with these differences:
+
+| | One machine |
+| --- | --- |
+| Security group | 22 (SSH) and 8000 (API) from your IPs only. No 6379 |
+| `REDIS_BIND_IP` in `api.env` | The machine's own private IP (`hostname -I`) |
+| `REDIS_URL` in `worker.env` | `redis://:<REDIS_PASSWORD>@<the same private IP>:6379/0` |
+| `WORKER_EXIT_WHEN_EMPTY` in `worker.env` | `false`: the worker keeps running and the machine stays on |
+| Start the worker | `docker run -d --name mmp-worker --restart unless-stopped --gpus all --env-file /opt/mmp/worker.env -v /models:/models:ro --shm-size 2g <worker image>` instead of `run-worker.sh` and the service of 6.7 (those shut the server down) |
+| Images | Can be built on the machine itself (section 3) instead of pushed to ECR |
+| Cost | About $0.53 an hour while running. Stop the instance when not testing; it comes back up with everything started |
+
+Later, split it into the two-server setup below to save cost.
 
 ## 1. Before you start
 
 | Item | Where |
 | --- | --- |
-| GPU quota: "Running On-Demand G and VT instances", at least 4 vCPUs in `ap-south-1` | AWS Service Quotas. Request it first: approval can take days |
+| GPU quota: "Running On-Demand G and VT instances", at least 4 vCPUs in `ap-northeast-2` | AWS Service Quotas. Request it first: approval can take days |
 | A domain name for the API, such as `moderation.example.com` | Your DNS provider |
 | The database migrations run on the target database | Section 2 |
 | A password for the `moderation_service` role | Section 2 |
@@ -59,10 +75,10 @@ docker build -f deploy/Dockerfile --target worker -t mmp-moderation-worker:1.0 .
 Push both to Amazon ECR (create two repositories named `mmp-moderation-api` and `mmp-moderation-worker` first):
 
 ```bash
-aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin <account>.dkr.ecr.ap-south-1.amazonaws.com
+aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin <account>.dkr.ecr.ap-northeast-2.amazonaws.com
 for name in api worker; do
-  docker tag mmp-moderation-$name:1.0 <account>.dkr.ecr.ap-south-1.amazonaws.com/mmp-moderation-$name:1.0
-  docker push <account>.dkr.ecr.ap-south-1.amazonaws.com/mmp-moderation-$name:1.0
+  docker tag mmp-moderation-$name:1.0 <account>.dkr.ecr.ap-northeast-2.amazonaws.com/mmp-moderation-$name:1.0
+  docker push <account>.dkr.ecr.ap-northeast-2.amazonaws.com/mmp-moderation-$name:1.0
 done
 ```
 
@@ -87,7 +103,7 @@ The worker needs outbound access to Redis and to Supabase (database and storage)
 1. Launch Ubuntu 24.04 LTS, `t3.small`, 30 GB gp3, security group `mmp-api`. Give it an Elastic IP and point the domain at it.
 2. Install Docker: `curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker ubuntu`, then log in again.
 3. Copy the repo's `deploy/` folder to `/opt/mmp/deploy/`.
-4. Create `/opt/mmp/api.env` from `.env.example` (the "both servers" and "API server only" parts). `chmod 600` it.
+4. Create `/opt/mmp/api.env` from `deploy/api.env.example`. `chmod 600` it.
 
    | Setting | Value |
    | --- | --- |
@@ -100,7 +116,7 @@ The worker needs outbound access to Redis and to Supabase (database and storage)
 
    ```bash
    cd /opt/mmp/deploy
-   API_IMAGE=<account>.dkr.ecr.ap-south-1.amazonaws.com/mmp-moderation-api:1.0 \
+   API_IMAGE=<account>.dkr.ecr.ap-northeast-2.amazonaws.com/mmp-moderation-api:1.0 \
      docker compose -f docker-compose.api.yml --env-file /opt/mmp/api.env up -d
    curl -s localhost:8000/health/ready
    ```
@@ -122,7 +138,7 @@ The worker needs outbound access to Redis and to Supabase (database and storage)
 1. Launch the AMI **"Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)"**. It has the NVIDIA driver, Docker and the NVIDIA container toolkit. Use `g4dn.xlarge`, a 100 GB gp3 disk and security group `mmp-worker`.
 2. Check the GPU: `nvidia-smi` should show a Tesla T4.
 3. Copy `deploy/` to `/opt/mmp/deploy/` and `chmod +x /opt/mmp/deploy/run-worker.sh`.
-4. Create `/opt/mmp/worker.env` from `.env.example` (the "both servers" and "GPU worker only" parts), with `chmod 600`:
+4. Create `/opt/mmp/worker.env` from `deploy/worker.env.example`, with `chmod 600`:
    `REDIS_URL` points to the API server's **private** IP; `DATABASE_URL` is from section 2.
 5. Pull the worker image and download the models once (about 13.8 GB, 10 to 20 minutes):
 

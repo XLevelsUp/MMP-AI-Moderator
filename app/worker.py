@@ -55,11 +55,15 @@ class Worker:
         """Download and check the file. Returns the answer and the file's fingerprint and size."""
         job = delivery.job
         ctx.path = settings.temp_dir / f"{job.content_id}.upload"
+        started = perf_counter()
         try:
             intake = await download_media(job.media_url, job.content_type, ctx.path, self.transport)
         except ValidationFailure as failure:
             ctx.reject("MOD_008", failure.flag)
             return finish(ctx), None, None
+        finally:
+            # In the per-stage times of the result log: a slow storage link shows up as itself.
+            ctx.timings["download"] = round((perf_counter() - started) * 1000)
         ctx.size_bytes, ctx.sha256 = intake.size_bytes, intake.sha256
 
         key = UploadKey(intake.sha256, UUID(job.account_id), job.content_type, job.context, job.model_version, job.media_id)
